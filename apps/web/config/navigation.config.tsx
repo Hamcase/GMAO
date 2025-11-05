@@ -1,5 +1,5 @@
-import { Home, User } from 'lucide-react';
 import { z } from 'zod';
+import { Home, LayoutDashboard, Scan, MessageSquare, Bot, Package, Activity, User } from 'lucide-react';
 
 import { NavigationConfigSchema } from '@kit/ui/navigation-schema';
 
@@ -7,15 +7,61 @@ import pathsConfig from '~/config/paths.config';
 
 const iconClasses = 'w-4';
 
+export type NavItem = {
+  label: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+
+const navigation: NavItem[] = [
+  { label: 'Home', href: '/home', icon: Home },
+  { label: 'Dashboard', href: '/home/dashboard', icon: LayoutDashboard },
+  { label: 'OCR', href: '/home/test-ocr', icon: Scan },
+  { label: 'Chatbot', href: '/home/chat', icon: MessageSquare },
+  { label: 'Gen AI', href: '/home/gen-ai', icon: Bot },
+  { label: 'PDR', href: '/home/pdr', icon: Package },
+  { label: 'AMDEC', href: '/home/amdec', icon: Activity },
+];
+
 const routes = [
   {
     label: 'common:routes.application',
     children: [
       {
-        label: 'common:routes.home',
+        label: 'Accueil',
         path: pathsConfig.app.home,
         Icon: <Home className={iconClasses} />,
         end: true,
+      },
+      {
+        label: 'Dashboard',
+        path: '/home/dashboard',
+        Icon: <LayoutDashboard className={iconClasses} />,
+      },
+      {
+        label: 'OCR',
+        path: '/home/test-ocr',
+        Icon: <Scan className={iconClasses} />,
+      },
+      {
+        label: 'Chatbot',
+        path: '/home/chat',
+        Icon: <MessageSquare className={iconClasses} />,
+      },
+      {
+        label: 'Gen AI',
+        path: '/home/gen-ai',
+        Icon: <Bot className={iconClasses} />,
+      },
+      {
+        label: 'PDR',
+        path: '/home/pdr',
+        Icon: <Package className={iconClasses} />,
+      },
+      {
+        label: 'AMDEC',
+        path: '/home/amdec',
+        Icon: <Activity className={iconClasses} />,
       },
     ],
   },
@@ -36,3 +82,5 @@ export const navigationConfig = NavigationConfigSchema.parse({
   style: process.env.NEXT_PUBLIC_NAVIGATION_STYLE,
   sidebarCollapsed: process.env.NEXT_PUBLIC_HOME_SIDEBAR_COLLAPSED,
 });
+
+export default navigation;

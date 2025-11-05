@@ -94,7 +94,7 @@ Options:
 - Suggérer pièces: ${options?.suggestParts ? 'oui' : 'non'}
 - Inclure outils/specs: ${options?.includeTools ? 'oui' : 'non'}
 - Inclure évaluation risques/LOTO: ${options?.includeRisk ? 'oui' : 'non'}
-- Inclure ressources documentaires: ${options?.includeResources ? 'oui (retourne URLs de constructeurs fiables: Schneider, Siemens, ABB, OSHA, etc.)' : 'non'}
+- Inclure ressources documentaires: ${options?.includeResources ? 'oui (retourne 3-5 URLs vers pages d\'accueil de support UNIQUEMENT: https://www.se.com/fr/fr/, https://www.siemens.com/fr/fr/, https://new.abb.com/fr, https://www.osha.gov/. Titre décrit ce que l\'utilisateur doit chercher, ex: "Manuel moteur M12" mais URL pointe vers page d\'accueil support)' : 'non'}
 
 Contraintes:
 - Fournir des étapes ordonnées, claires et actionnables.
@@ -102,7 +102,7 @@ Contraintes:
 - Si pièces incluses: 2–6 refs plausibles (ex: roulements, contacteurs), quantités réalistes.
 - Si outils inclus: multimètre, clé dynamométrique, manomètre, kit LOTO, huiles/fluides pertinents avec valeurs (couples, pressions, températures).
 - Si risques inclus: évaluer gravité, probabilité, niveau (matrice), lister PPE nécessaires et étapes LOTO.
-- Si ressources incluses: retourner 3–5 liens vers docs officiels constructeurs (pas de Google search; liens directs portails support).
+- Si ressources incluses: IMPORTANT - utiliser UNIQUEMENT les URLs de pages d'accueil support: Schneider Electric (https://www.se.com/fr/fr/), Siemens (https://www.siemens.com/fr/fr/), ABB (https://new.abb.com/fr), OSHA (https://www.osha.gov/). Le titre doit décrire le document recherché (ex: "Guide maintenance compresseur Atlas Copco") mais l'URL doit rester la page d'accueil.
 `;
 
     const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -112,10 +112,9 @@ Contraintes:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.1-70b-versatile',
+        model: 'llama-3.1-8b-instant',
         temperature: 0.3,
-        max_tokens: 2000,
-        response_format: { type: 'json_object' },
+        max_tokens: 2500,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
@@ -123,8 +122,11 @@ Contraintes:
       }),
     });
 
+    console.log('[GenAI] Request sent to Groq, status:', resp.status);
+
     if (!resp.ok) {
       const errText = await safeText(resp);
+      console.error('[GenAI API] Groq error:', resp.status, errText);
       return NextResponse.json(
         { error: `Groq error: ${resp.status} ${resp.statusText}`, detail: errText?.slice(0, 500) },
         { status: 502 },

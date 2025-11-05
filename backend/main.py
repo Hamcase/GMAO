@@ -17,8 +17,7 @@ from dotenv import load_dotenv
 # --- NOUVELLES IMPORTATIONS POUR RAG ET LLM ---
 from supabase import create_client, Client # Pour se connecter à la DB Supabase
 from sentence_transformers import SentenceTransformer # Pour créer les vecteurs (embeddings)
-from mistralai.client import MistralClient # Pour l'API Mistral
-from mistralai.models.chat_completion import ChatMessage # Pour formater les messages Mistral
+from mistralai import Mistral
 
 # --- CHARGEMENT DES SECRETS DEPUIS backend/.env ---
 load_dotenv()
@@ -57,9 +56,9 @@ except Exception as e:
     print(f"Erreur de chargement du modèle SentenceTransformer: {e}")
     exit(1)
 
-# 3. Client pour l'API Mistral
+# 3. Client pour l'API Mistral (nouveau SDK)
 try:
-    mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+    mistral_client = Mistral(api_key=MISTRAL_API_KEY)
     print("Client Mistral initialisé.")
 except Exception as e:
     print(f"Erreur d'initialisation du client Mistral: {e}")
@@ -326,20 +325,41 @@ async def rag_query_with_generation(
         # --- 5. Appeler l'API Mistral ---
         print("Appel à l'API Mistral...")
         try:
-             chat_response = mistral_client.chat(
-                 model="mistral-tiny", # Modèle rapide et économique pour commencer
-                 messages=[
-                     ChatMessage(role="system", content=system_prompt),
-                     ChatMessage(role="user", content=user_prompt)
-                 ],
-                 temperature=0.1, # Réponse plus factuelle
-                 max_tokens=300 # Limiter la longueur de la réponse
-             )
-             generated_answer = chat_response.choices[0].message.content
-             print("Réponse reçue de Mistral.")
+            # Utiliser le SDK Mistral moderne : messages en tant que dicts {role, content}
+            chat_response = mistral_client.chat.complete(
+                model="mistral-tiny",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=300,
+            )
+
+            # Extraire la réponse en gérant plusieurs formats possibles
+            generated_answer = ""
+            if chat_response and getattr(chat_response, "choices", None):
+                msg = chat_response.choices[0].message.content
+                if isinstance(msg, str):
+                    generated_answer = msg
+                elif isinstance(msg, list):
+                    # Liste de ContentChunk ou de strings
+                    parts = []
+                    for item in msg:
+                        if isinstance(item, str):
+                            parts.append(item)
+                        elif isinstance(item, dict) and item.get("text"):
+                            parts.append(item.get("text"))
+                        else:
+                            parts.append(str(item))
+                    generated_answer = " ".join(parts)
+                else:
+                    generated_answer = str(msg)
+
+            print("Réponse reçue de Mistral.")
         except Exception as mistral_error:
-             print(f"Erreur lors de l'appel à l'API Mistral: {mistral_error}")
-             raise HTTPException(status_code=502, detail=f"Erreur de communication avec le service de génération de langage: {mistral_error}")
+            print(f"Erreur lors de l'appel à l'API Mistral: {mistral_error}")
+            raise HTTPException(status_code=502, detail=f"Erreur de communication avec le service de génération de langage: {mistral_error}")
 
 
         # --- 6. Renvoyer la réponse générée ET les sources au frontend ---
