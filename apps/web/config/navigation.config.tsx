@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Home, LayoutDashboard, Scan, MessageSquare, Bot, Package, Activity, User } from 'lucide-react';
+import { Home, LayoutDashboard, Scan, MessageSquare, Bot, Package, Activity, User, Upload } from 'lucide-react';
 
 import { NavigationConfigSchema } from '@kit/ui/navigation-schema';
 
@@ -16,6 +16,7 @@ export type NavItem = {
 const navigation: NavItem[] = [
   { label: 'Home', href: '/home', icon: Home },
   { label: 'Dashboard', href: '/home/dashboard', icon: LayoutDashboard },
+  { label: 'Upload Data', href: '/home/upload', icon: Upload },
   { label: 'OCR', href: '/home/test-ocr', icon: Scan },
   { label: 'Chatbot', href: '/home/chat', icon: MessageSquare },
   { label: 'Gen AI', href: '/home/gen-ai', icon: Bot },
@@ -37,6 +38,11 @@ const routes = [
         label: 'Dashboard',
         path: '/home/dashboard',
         Icon: <LayoutDashboard className={iconClasses} />,
+      },
+      {
+        label: 'Upload Data',
+        path: '/home/upload',
+        Icon: <Upload className={iconClasses} />,
       },
       {
         label: 'OCR',

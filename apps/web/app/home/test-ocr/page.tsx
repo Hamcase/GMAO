@@ -11,6 +11,7 @@ import { Input } from '@kit/ui/input';
 import { Label } from '@kit/ui/label';
 import { Textarea } from '@kit/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@kit/ui/card';
+
 // 4. Le composant de notre page
 export default function TestOcrPage() {
   // États pour stocker le fichier, la réponse de l'API, et le statut
@@ -18,6 +19,9 @@ export default function TestOcrPage() {
   const [responseText, setResponseText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Données de démonstration (supprimées car le backend ne retourne pas de bbox)
+  // const demoFields = [...];
 
   // 5. Créer un client Supabase pour le navigateur
   // On en a besoin pour récupérer le "badge" (token) de l'utilisateur
@@ -28,7 +32,7 @@ export default function TestOcrPage() {
 
   // 6. Fonction quand l'utilisateur choisit un fichier
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
+    if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
     }
   };
@@ -102,7 +106,7 @@ export default function TestOcrPage() {
             <Input id="pdf-upload" type="file" accept="application/pdf" onChange={handleFileChange} />
           </div>
 
-          <Button onClick={handleSubmit} disabled={loading}>
+          <Button onClick={handleSubmit} disabled={loading} className="w-full">
             {loading ? 'Traitement en cours...' : "2. Lancer l'OCR"}
           </Button>
 

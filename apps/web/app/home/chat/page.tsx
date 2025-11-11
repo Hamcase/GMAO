@@ -220,6 +220,63 @@ interface Message {
   sources?: Source[]; // Les sources ne s'appliquent qu'aux messages de l'assistant
 }
 
+// Composant pour afficher le texte avec citations cliquables
+function MessageWithCitations({ content, sources }: { content: string; sources: Source[] }) {
+  if (sources.length === 0) return <p>{content}</p>;
+
+  // Trouver les citations [1], [2], etc. dans le texte
+  const citationRegex = /\[(\d+)\]/g;
+  const parts: (string | React.ReactElement)[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = citationRegex.exec(content)) !== null) {
+    // Ajouter le texte avant la citation
+    if (match.index > lastIndex) {
+      parts.push(content.substring(lastIndex, match.index));
+    }
+
+    // Ajouter la citation cliquable
+    const citationNum = parseInt(match[1] || '0');
+    const sourceIndex = citationNum - 1;
+    
+    if (sourceIndex >= 0 && sourceIndex < sources.length) {
+      const source = sources[sourceIndex];
+      if (!source) continue;
+      
+      const messageId = Date.now(); // Dans un contexte réel, utiliser l'ID du message parent
+      parts.push(
+        <button
+          key={`cite-${match.index}`}
+          onClick={() => {
+            const sourceElement = document.getElementById(`source-${messageId}-${sourceIndex}`);
+            sourceElement?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            sourceElement?.classList.add('ring-2', 'ring-primary');
+            setTimeout(() => {
+              sourceElement?.classList.remove('ring-2', 'ring-primary');
+            }, 2000);
+          }}
+          className="mx-0.5 inline-flex h-4 w-4 items-center justify-center rounded bg-primary/20 text-[10px] font-bold text-primary hover:bg-primary/30 transition-colors"
+          title={`Voir source: ${source.document_name}`}
+        >
+          {citationNum}
+        </button>
+      );
+    } else {
+      parts.push(match[0]); // Garder le texte original si l'index est invalide
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Ajouter le reste du texte
+  if (lastIndex < content.length) {
+    parts.push(content.substring(lastIndex));
+  }
+
+  return <p>{parts}</p>;
+}
+
 // 4. Le composant de notre page Chatbot
 export default function ChatPage() {
   // États
@@ -229,7 +286,6 @@ export default function ChatPage() {
   const [error, setError] = useState('');
 
   // Référence pour scroller automatiquement vers le bas
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null); // Référence ajoutée pour le viewport
 
   // 5. Client Supabase (pour le token)
@@ -328,8 +384,8 @@ export default function ChatPage() {
       </Card>
 
       {/* Zone de chat scrollable */}
-       <ScrollArea ref={scrollAreaRef} className="flex-grow rounded-md border p-4 mb-4" viewportRef={viewportRef}>
-         <div className="flex flex-col space-y-4">
+       <ScrollArea className="flex-grow rounded-md border p-4 mb-4">
+         <div ref={viewportRef} className="flex flex-col space-y-4">
            {messages.map((message) => (
              <div
                key={message.id}
@@ -353,16 +409,28 @@ export default function ChatPage() {
                     : 'bg-muted'
                 }`}
               >
-                {/* Contenu du message */}
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                {/* Contenu du message avec citations cliquables */}
+                <div className="whitespace-pre-wrap">
+                  {message.role === 'assistant' ? (
+                    <MessageWithCitations content={message.content} sources={message.sources || []} />
+                  ) : (
+                    <p>{message.content}</p>
+                  )}
+                </div>
 
                 {/* Affichage des sources pour les messages de l'assistant */}
                 {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                   <div className="mt-3 space-y-1 border-t border-border/50 pt-2">
                     <p className="text-xs font-medium text-muted-foreground">Sources :</p>
                     {message.sources.map((source, index) => (
-                      <div key={index} className="text-xs text-muted-foreground/80" title={source.content_preview}>
-                        <span className="font-semibold">{index + 1}.</span> {source.document_name}
+                      <div 
+                        key={index} 
+                        id={`source-${message.id}-${index}`}
+                        className="rounded-sm bg-background/50 p-2 text-xs text-muted-foreground/80 transition-colors hover:bg-background" 
+                        title={source.content_preview}
+                      >
+                        <span className="font-semibold text-primary">[{index + 1}]</span> {source.document_name}
+                        <p className="mt-1 line-clamp-2 text-[10px] italic opacity-70">{source.content_preview}</p>
                       </div>
                     ))}
                   </div>
