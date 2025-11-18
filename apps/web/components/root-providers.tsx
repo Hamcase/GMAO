@@ -19,6 +19,7 @@ import { i18nResolver } from '~/lib/i18n/i18n.resolver';
 import { getI18nSettings } from '~/lib/i18n/i18n.settings';
 
 import { ReactQueryProvider } from './react-query-provider';
+import { LocalDbProvider } from '@kit/shared/localdb/provider';
 
 const captchaSiteKey = authConfig.captchaTokenSiteKey;
 
@@ -46,6 +47,7 @@ export function RootProviders({
 
   return (
     <ReactQueryProvider>
+      <LocalDbProvider>
       <I18nProvider settings={i18nSettings} resolver={i18nResolver}>
         <CaptchaProvider>
           <CaptchaTokenSetter siteKey={captchaSiteKey} />
@@ -67,6 +69,7 @@ export function RootProviders({
           <VersionUpdater />
         </If>
       </I18nProvider>
+      </LocalDbProvider>
     </ReactQueryProvider>
   );
 }

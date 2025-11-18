@@ -6,7 +6,9 @@
       "~/*": ["./app/*"],
       "~/config/*": ["./config/*"],
       "~/components/*": ["./components/*"],
-      "~/lib/*": ["./lib/*"]
+      "~/lib/*": ["./lib/*"],
+      "@kit/shared/*": ["../../packages/shared/src/*"],
+      "@kit/shared/localdb/*": ["../../packages/shared/src/localdb/*"]
     },
     "plugins": [
       {

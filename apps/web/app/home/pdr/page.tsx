@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppBreadcrumbs } from '@kit/ui/app-breadcrumbs';
+import { createClient } from '~/lib/supabase-browser-client';
 import { PDRThresholdSlider } from '~/components/pdr-threshold-slider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@kit/ui/card';
 import { Badge } from '@kit/ui/badge';
@@ -47,142 +48,8 @@ import {
   Scatter,
 } from 'recharts';
 
-// ========== DONNÉES MOCKÉES ==========
-
-// Séries temporelles - Demande historique + prévisions
-const demandData = [
-  // Historique (6 derniers mois)
-  { month: 'Avr', actual: 245, forecast: null, lower: null, upper: null, isHistorical: true },
-  { month: 'Mai', actual: 268, forecast: null, lower: null, upper: null, isHistorical: true },
-  { month: 'Jui', actual: 312, forecast: null, lower: null, upper: null, isHistorical: true },
-  { month: 'Juil', actual: 298, forecast: null, lower: null, upper: null, isHistorical: true },
-  { month: 'Aoû', actual: 335, forecast: null, lower: null, upper: null, isHistorical: true },
-  { month: 'Sep', actual: 289, forecast: null, lower: null, upper: null, isHistorical: true },
-  // Prévisions (3 prochains mois)
-  { month: 'Oct', actual: null, forecast: 310, lower: 280, upper: 340, isHistorical: false },
-  { month: 'Nov', actual: null, forecast: 325, lower: 290, upper: 360, isHistorical: false },
-  { month: 'Déc', actual: null, forecast: 342, lower: 305, upper: 380, isHistorical: false },
-];
-
-// Stock actuel par pièce
-const stockData = [
-  { 
-    id: 1, 
-    name: 'Roulements SKF 6205', 
-    category: 'Mécanique',
-    stockActuel: 45, 
-    stockSecurite: 30, 
-    pointReappro: 50,
-    leadTime: 7, // jours
-    coutUnitaire: 45.50,
-    consommationMoyenne: 12, // par mois
-    status: 'warning',
-    tendance: 'down',
-  },
-  { 
-    id: 2, 
-    name: 'Filtres hydrauliques HF35', 
-    category: 'Hydraulique',
-    stockActuel: 18, 
-    stockSecurite: 25, 
-    pointReappro: 40,
-    leadTime: 10,
-    coutUnitaire: 78.00,
-    consommationMoyenne: 8,
-    status: 'critical',
-    tendance: 'down',
-  },
-  { 
-    id: 3, 
-    name: 'Joints toriques NBR', 
-    category: 'Étanchéité',
-    stockActuel: 120, 
-    stockSecurite: 50, 
-    pointReappro: 80,
-    leadTime: 5,
-    coutUnitaire: 3.20,
-    consommationMoyenne: 25,
-    status: 'good',
-    tendance: 'stable',
-  },
-  { 
-    id: 4, 
-    name: 'Contacteurs Schneider LC1', 
-    category: 'Électrique',
-    stockActuel: 35, 
-    stockSecurite: 20, 
-    pointReappro: 30,
-    leadTime: 14,
-    coutUnitaire: 125.00,
-    consommationMoyenne: 6,
-    status: 'good',
-    tendance: 'up',
-  },
-  { 
-    id: 5, 
-    name: 'Courroies trapézoïdales SPZ', 
-    category: 'Transmission',
-    stockActuel: 8, 
-    stockSecurite: 15, 
-    pointReappro: 25,
-    leadTime: 7,
-    coutUnitaire: 22.50,
-    status: 'critical',
-    tendance: 'down',
-    consommationMoyenne: 5,
-  },
-];
-
-// Alertes de réapprovisionnement
-const alertes = [
-  { 
-    id: 1, 
-    type: 'critical', 
-    piece: 'Filtres hydrauliques HF35', 
-    message: 'Stock sous seuil de sécurité (18/25)', 
-    action: 'Commander immédiatement',
-    delai: 'Rupture dans 2 jours',
-    quantite: 40,
-    cout: 3120,
-  },
-  { 
-    id: 2, 
-    type: 'critical', 
-    piece: 'Courroies trapézoïdales SPZ', 
-    message: 'Stock critique (8/15)', 
-    action: 'Commander immédiatement',
-    delai: 'Rupture dans 1 jour',
-    quantite: 30,
-    cout: 675,
-  },
-  { 
-    id: 3, 
-    type: 'warning', 
-    piece: 'Roulements SKF 6205', 
-    message: 'Proche du point de réappro (45/50)', 
-    action: 'Commander sous 48h',
-    delai: 'Rupture dans 4 jours',
-    quantite: 50,
-    cout: 2275,
-  },
-];
-
-// Mission Time Impact (analyse coût de rupture)
-const missionTimeData = [
-  { scenario: 'Disponible', downtime: 0, cost: 0, color: '#10b981' },
-  { scenario: 'Retard 1j', downtime: 8, cost: 12000, color: '#f59e0b' },
-  { scenario: 'Retard 3j', downtime: 24, cost: 36000, color: '#ef4444' },
-  { scenario: 'Rupture', downtime: 72, cost: 108000, color: '#991b1b' },
-];
-
-// Prévisions par catégorie
-const categoryForecast = [
-  { category: 'Mécanique', prev: 2850, actual: 3100, budget: 3500, variation: '+8.8%' },
-  { category: 'Hydraulique', prev: 1450, actual: 1620, budget: 1800, variation: '+11.7%' },
-  { category: 'Électrique', prev: 3200, actual: 2980, budget: 3000, variation: '-6.9%' },
-  { category: 'Étanchéité', prev: 890, actual: 920, budget: 1000, variation: '+3.4%' },
-  { category: 'Transmission', prev: 1680, actual: 1750, budget: 1900, variation: '+4.2%' },
-];
+// ========== HELPERS ==========
+const MONTHS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jui', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -205,12 +72,157 @@ export default function PDRPage() {
   const [aiEnabled, setAiEnabled] = useState(true);
   const [selectedPiece, setSelectedPiece] = useState<string>('all');
   const [horizon, setHorizon] = useState<string>('3'); // mois
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // Dynamic state from Supabase
+  const [stockData, setStockData] = useState<any[]>([]);
+  const [demandData, setDemandData] = useState<any[]>([]);
+  const [alertes, setAlertes] = useState<any[]>([]);
+  const [categoryForecast, setCategoryForecast] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchPDRData = async () => {
+      try {
+        const supabase = createClient();
+
+        // 1. Fetch reorder status (view_reorder_status)
+        const { data: reorderData } = await supabase
+          .from('view_reorder_status')
+          .select('*')
+          .order('status', { ascending: true }); // critical first
+
+        if (reorderData && reorderData.length) {
+          const stock = reorderData.map((r: any) => ({
+            id: r.part_id,
+            name: r.part_name || 'N/A',
+            category: r.category || 'Autre',
+            stockActuel: r.current_quantity || 0,
+            stockSecurite: r.safety_stock || 0,
+            pointReappro: r.reorder_point || 0,
+            leadTime: r.lead_time_days || 7,
+            coutUnitaire: r.unit_cost || 0,
+            consommationMoyenne: r.avg_monthly_usage || 0,
+            status: r.status || 'unknown',
+            tendance: r.current_quantity > r.reorder_point ? 'stable' : 'down',
+          }));
+          setStockData(stock);
+
+          // Generate alerts for critical/warning items
+          const alerts = stock
+            .filter((s: any) => s.status === 'critical' || s.status === 'warning')
+            .map((s: any, idx: number) => {
+              const daysToRupture = s.consommationMoyenne > 0 ? Math.floor((s.stockActuel / s.consommationMoyenne) * 30) : 999;
+              const quantiteRecommandee = Math.max(s.pointReappro - s.stockActuel, 20);
+              return {
+                id: idx + 1,
+                type: s.status,
+                piece: s.name,
+                message: `Stock ${s.status === 'critical' ? 'sous seuil de sécurité' : 'proche du point de réappro'} (${s.stockActuel}/${s.stockSecurite})`,
+                action: s.status === 'critical' ? 'Commander immédiatement' : 'Commander sous 48h',
+                delai: `Rupture dans ${daysToRupture} jours`,
+                quantite: quantiteRecommandee,
+                cout: Math.round(quantiteRecommandee * s.coutUnitaire),
+              };
+            });
+          setAlertes(alerts);
+        } else {
+          setStockData([]);
+          setAlertes([]);
+        }
+
+        // 2. Fetch part demand (view_part_demand) for trend over time
+        const { data: demandRows } = await supabase
+          .from('view_part_demand')
+          .select('*')
+          .order('period', { ascending: true });
+
+        if (demandRows && demandRows.length) {
+          // Group by period (YYYY-MM) and aggregate total usage
+          const grouped: Record<string, number> = {};
+          demandRows.forEach((r: any) => {
+            const key = r.period || 'N/A';
+            grouped[key] = (grouped[key] || 0) + (r.total_usage || 0);
+          });
+          // Build time series for last 6 months + simple forecast
+          const sortedPeriods = Object.keys(grouped).sort().slice(-6);
+          const historical = sortedPeriods.map((period) => {
+            const date = new Date(period + '-01');
+            const month = MONTHS_FR[date.getMonth()];
+            return { month, actual: grouped[period], forecast: null, lower: null, upper: null, isHistorical: true };
+          });
+          // Simple forecast: average of last 3 months + 5% growth
+          const lastThree = sortedPeriods.slice(-3).map(p => grouped[p] || 0);
+          const avgDemand = lastThree.length ? lastThree.reduce((a, b) => (a || 0) + (b || 0), 0) / lastThree.length : 0;
+          const forecast = [];
+          const now = new Date();
+          for (let i = 1; i <= 3; i++) {
+            const futureDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+            const month = MONTHS_FR[futureDate.getMonth()];
+            const predicted = Math.round(avgDemand * (1 + i*0.05));
+            forecast.push({
+              month,
+              actual: null,
+              forecast: predicted,
+              lower: Math.round(predicted * 0.9),
+              upper: Math.round(predicted * 1.1),
+              isHistorical: false,
+            });
+          }
+          setDemandData([...historical, ...forecast]);
+        } else {
+          setDemandData([]);
+        }
+
+        // 3. Dépense par catégorie (réalisé uniquement, aucune valeur simulée)
+        if (reorderData && reorderData.length) {
+          const categories: Record<string, number> = {};
+          reorderData.forEach((r: any) => {
+            const cat = r.category || 'Autre';
+            const val = (r.current_quantity || 0) * (r.unit_cost || 0);
+            categories[cat] = (categories[cat] || 0) + val;
+          });
+          const catActual = Object.entries(categories).map(([category, value]) => ({
+            category,
+            actual: Math.round(value),
+          }));
+          setCategoryForecast(catActual);
+        } else {
+          setCategoryForecast([]);
+        }
+      } catch (e) {
+        console.error('Error fetching PDR data:', e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchPDRData();
+  }, []);
 
   // Calculs KPIs
   const totalStock = stockData.reduce((sum, item) => sum + item.stockActuel, 0);
   const valeurStock = stockData.reduce((sum, item) => sum + (item.stockActuel * item.coutUnitaire), 0);
   const piecesEnAlerte = stockData.filter(item => item.status === 'critical' || item.status === 'warning').length;
   const coutReapproTotal = alertes.reduce((sum, alerte) => sum + alerte.cout, 0);
+  
+  // Mission time impact derived heuristically from current critical alerts (placeholder logic until real downtime linkage)
+  const missionTimeData = (() => {
+    const criticalCount = alertes.filter(a => a.type === 'critical').length;
+    if (!criticalCount) return [];
+    // Heuristic base cost derived from stock value (avoid division by 0)
+    const baseCost = valeurStock > 0 ? Math.max(500, valeurStock / 75) : 1000;
+    const scenario = (label: string, factor: number, color: string) => ({
+      scenario: label,
+      downtime: criticalCount * factor,
+      cost: Math.round(baseCost * criticalCount * (factor / 4 + 1.2)),
+      color,
+    });
+    return [
+      { scenario: 'Disponible', downtime: 0, cost: 0, color: '#10b981' },
+      scenario('Retard court', 4, '#f59e0b'),
+      scenario('Retard long', 12, '#ef4444'),
+      scenario('Rupture', 24, '#991b1b'),
+    ];
+  })();
 
   return (
     <div className="flex flex-col space-y-6 pb-36">
@@ -223,6 +235,14 @@ export default function PDRPage() {
           <p className="text-muted-foreground">
             Analyse prédictive des besoins en pièces de rechange avec seuils business optimisés
           </p>
+          <div className="mt-2 flex items-center gap-2">
+            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+              📊 DONNÉES RÉELLES
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {stockData.length > 0 ? `${stockData.length} pièces depuis Supabase` : 'En attente de données stock'}
+            </span>
+          </div>
         </div>
 
         {/* Toggle IA */}
@@ -256,9 +276,11 @@ export default function PDRPage() {
             <Package className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{valeurStock.toLocaleString('fr-FR')} €</div>
+            <div className="text-2xl font-bold">
+              {isLoading ? '...' : `${valeurStock.toLocaleString('fr-FR')} €`}
+            </div>
             <p className="text-xs text-muted-foreground">
-              {totalStock} pièces en stock
+              {isLoading ? '...' : `${totalStock} pièces en stock`}
             </p>
           </CardContent>
         </Card>
@@ -269,9 +291,9 @@ export default function PDRPage() {
             <AlertTriangle className="h-4 w-4 text-orange-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{piecesEnAlerte}</div>
+            <div className="text-2xl font-bold">{isLoading ? '...' : piecesEnAlerte}</div>
             <p className="text-xs text-muted-foreground">
-              {alertes.filter(a => a.type === 'critical').length} critiques
+              {isLoading ? '...' : `${alertes.filter(a => a.type === 'critical').length} critiques`}
             </p>
           </CardContent>
         </Card>
@@ -282,9 +304,11 @@ export default function PDRPage() {
             <ShoppingCart className="h-4 w-4 text-red-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{coutReapproTotal.toLocaleString('fr-FR')} €</div>
+            <div className="text-2xl font-bold">
+              {isLoading ? '...' : `${coutReapproTotal.toLocaleString('fr-FR')} €`}
+            </div>
             <p className="text-xs text-muted-foreground">
-              {alertes.length} commandes à passer
+              {isLoading ? '...' : `${alertes.length} commandes à passer`}
             </p>
           </CardContent>
         </Card>
@@ -296,10 +320,10 @@ export default function PDRPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {(stockData.reduce((sum, item) => sum + item.leadTime, 0) / stockData.length).toFixed(1)} jours
+              {isLoading ? '...' : stockData.length > 0 ? `${(stockData.reduce((sum, item) => sum + item.leadTime, 0) / stockData.length).toFixed(1)} jours` : '—'}
             </div>
             <p className="text-xs text-muted-foreground">
-              Min 5j - Max 14j
+              Lead time moyen fournisseurs
             </p>
           </CardContent>
         </Card>
@@ -408,18 +432,35 @@ export default function PDRPage() {
             </ResponsiveContainer>
 
             <div className="mt-4 grid grid-cols-3 gap-3">
-              <div className="rounded-md bg-blue-50 p-3 dark:bg-blue-950">
-                <p className="text-xs text-muted-foreground">Demande actuelle (Sep)</p>
-                <p className="text-lg font-bold">289 pièces</p>
-              </div>
-              <div className="rounded-md bg-green-50 p-3 dark:bg-green-950">
-                <p className="text-xs text-muted-foreground">Prévision Oct</p>
-                <p className="text-lg font-bold">310 pièces (+7.3%)</p>
-              </div>
-              <div className="rounded-md bg-purple-50 p-3 dark:bg-purple-950">
-                <p className="text-xs text-muted-foreground">Intervalle confiance</p>
-                <p className="text-lg font-bold">280-340 (95%)</p>
-              </div>
+              {(() => {
+                const hist = demandData.filter((d: any) => d.isHistorical);
+                const last = hist.length ? hist[hist.length - 1] : null;
+                const firstForecast = demandData.find((d: any) => !d.isHistorical) as any || null;
+                const pct = last && firstForecast && last.actual
+                  ? Number((((firstForecast.forecast || 0) - (last.actual || 0)) / (last.actual || 1) * 100).toFixed(1))
+                  : null;
+                return (
+                  <>
+                    <div className="rounded-md bg-blue-50 p-3 dark:bg-blue-950">
+                      <p className="text-xs text-muted-foreground">Demande actuelle ({last ? last.month : '—'})</p>
+                      <p className="text-lg font-bold">{last ? `${last.actual} pièces` : '—'}</p>
+                    </div>
+                    <div className="rounded-md bg-green-50 p-3 dark:bg-green-950">
+                      <p className="text-xs text-muted-foreground">Prévision {firstForecast ? firstForecast.month : '—'}</p>
+                      <p className="text-lg font-bold">
+                        {firstForecast ? `${firstForecast.forecast} pièces` : '—'}
+                        {pct != null ? ` (${pct > 0 ? '+' : ''}${pct}%)` : ''}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-purple-50 p-3 dark:bg-purple-950">
+                      <p className="text-xs text-muted-foreground">Intervalle confiance</p>
+                      <p className="text-lg font-bold">
+                        {firstForecast ? `${firstForecast.lower}-${firstForecast.upper}` : '—'}
+                      </p>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </CardContent>
         </Card>
@@ -550,59 +591,80 @@ export default function PDRPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={missionTimeData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="scenario" />
-                <YAxis yAxisId="left" label={{ value: 'Heures arrêt', angle: -90, position: 'insideLeft' }} />
-                <YAxis yAxisId="right" orientation="right" label={{ value: 'Coût (€)', angle: 90, position: 'insideRight' }} />
-                <Tooltip />
-                <Legend />
-                <Bar yAxisId="left" dataKey="downtime" name="Heures arrêt">
-                  {missionTimeData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Bar>
-                <Bar yAxisId="right" dataKey="cost" fill="#ef4444" name="Coût rupture (€)" />
-              </BarChart>
-            </ResponsiveContainer>
+            {missionTimeData.length ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={missionTimeData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="scenario" />
+                  <YAxis yAxisId="left" label={{ value: 'Heures arrêt', angle: -90, position: 'insideLeft' }} />
+                  <YAxis yAxisId="right" orientation="right" label={{ value: 'Coût (€)', angle: 90, position: 'insideRight' }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="downtime" name="Heures arrêt">
+                    {missionTimeData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Bar>
+                  <Bar yAxisId="right" dataKey="cost" fill="#ef4444" name="Coût rupture (€)" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-64 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">Aucune alerte critique pour estimer les scénarios d'impact</div>
+            )}
 
             <div className="mt-4 space-y-3">
-              <div className="rounded-md bg-green-50 p-3 dark:bg-green-950">
-                <p className="text-sm font-semibold text-green-900 dark:text-green-100">
-                  ✓ Stock disponible = 0€ de perte
-                </p>
-              </div>
-              <div className="rounded-md bg-red-50 p-3 dark:bg-red-950">
-                <p className="text-sm font-semibold text-red-900 dark:text-red-100">
-                  ⚠️ Rupture 3 jours = 36 000€ de coût downtime
-                </p>
-                <p className="text-xs text-red-700 dark:text-red-300">
-                  Calcul: 1 500€/h × 24h = 36 000€
-                </p>
-              </div>
-              <div className="rounded-md bg-purple-50 p-3 dark:bg-purple-950">
-                <p className="text-sm font-semibold text-purple-900 dark:text-purple-100">
-                  💡 ROI du stock de sécurité: {((36000 / valeurStock) * 100).toFixed(0)}x
-                </p>
-                <p className="text-xs text-purple-700 dark:text-purple-300">
-                  Investir {valeurStock.toLocaleString('fr-FR')}€ évite 36k€ de pertes
-                </p>
-              </div>
+              {missionTimeData.length ? (
+                <>
+                  <div className="rounded-md bg-green-50 p-3 dark:bg-green-950">
+                    <p className="text-sm font-semibold text-green-900 dark:text-green-100">
+                      ✓ Stock disponible = 0€ de perte
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-red-50 p-3 dark:bg-red-950">
+                    <p className="text-sm font-semibold text-red-900 dark:text-red-100">
+                      ⚠️ Scénario rupture = {(() => {
+                        const last = (missionTimeData.length ? missionTimeData[missionTimeData.length - 1] : undefined) as any | undefined;
+                        const cost = last?.cost ?? 0;
+                        return cost.toLocaleString('fr-FR');
+                      })()}€ de coût downtime
+                    </p>
+                    <p className="text-xs text-red-700 dark:text-red-300">
+                      Basé sur {alertes.filter(a => a.type === 'critical').length} alertes critiques actuelles
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-purple-50 p-3 dark:bg-purple-950">
+                    <p className="text-sm font-semibold text-purple-900 dark:text-purple-100">
+                      💡 Ratio protection: {(() => {
+                        if (!valeurStock || !missionTimeData.length) return '—';
+                        const last = (missionTimeData[missionTimeData.length - 1] as any | undefined);
+                        const cost = last?.cost ?? 0;
+                        return (cost / valeurStock).toFixed(1) + 'x';
+                      })()}
+                    </p>
+                    <p className="text-xs text-purple-700 dark:text-purple-300">
+                      Investir {valeurStock.toLocaleString('fr-FR')}€ protège contre des pertes élevées potentielles
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  Aucune donnée critique active — scénarios d'impact non calculés.
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Prévisions Budget par Catégorie */}
+      {/* Dépenses par Catégorie (réalisé) */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <DollarSign className="h-5 w-5 text-purple-500" />
-            Prévisions Budget par Catégorie
+            Dépenses par Catégorie
           </CardTitle>
           <CardDescription>
-            Comparaison prévisionnel vs réalisé vs budget annuel
+            Montants réalisés par catégorie
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -613,23 +675,15 @@ export default function PDRPage() {
               <YAxis type="category" dataKey="category" width={120} />
               <Tooltip />
               <Legend />
-              <Bar dataKey="prev" fill="#93c5fd" name="Prévisionnel" />
               <Bar dataKey="actual" fill="#3b82f6" name="Réalisé" />
-              <Bar dataKey="budget" fill="#10b981" name="Budget" />
             </BarChart>
           </ResponsiveContainer>
 
           <div className="mt-4 grid grid-cols-5 gap-3">
-            {categoryForecast.map((cat) => (
+            {categoryForecast.map((cat: any) => (
               <div key={cat.category} className="rounded-md bg-muted p-3">
                 <p className="mb-1 text-xs font-medium">{cat.category}</p>
                 <p className="text-sm font-bold">{cat.actual.toLocaleString('fr-FR')} €</p>
-                <Badge
-                  variant={cat.variation.startsWith('+') ? 'default' : 'secondary'}
-                  className="mt-1 text-xs"
-                >
-                  {cat.variation}
-                </Badge>
               </div>
             ))}
           </div>
@@ -645,36 +699,12 @@ export default function PDRPage() {
               Recommandations IA - Actions Prioritaires
             </CardTitle>
             <CardDescription>
-              Optimisation automatique basée sur l'analyse prédictive
+              Générées automatiquement dès que le modèle est disponible
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-3 rounded-md bg-white p-4 dark:bg-gray-900">
-              <CheckCircle2 className="mt-1 h-5 w-5 text-green-500" />
-              <div>
-                <p className="font-semibold">Commander Filtres hydrauliques HF35 maintenant</p>
-                <p className="text-sm text-muted-foreground">
-                  Stock critique (18/25). Lead time 10j. Rupture prévue dans 2j. Coût rupture estimé: 24 000€
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3 rounded-md bg-white p-4 dark:bg-gray-900">
-              <CheckCircle2 className="mt-1 h-5 w-5 text-green-500" />
-              <div>
-                <p className="font-semibold">Augmenter stock de sécurité Roulements SKF 6205</p>
-                <p className="text-sm text-muted-foreground">
-                  Consommation +15% vs prévision. Seuil actuel (30) insuffisant. Recommandation: 45 pièces
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3 rounded-md bg-white p-4 dark:bg-gray-900">
-              <CheckCircle2 className="mt-1 h-5 w-5 text-green-500" />
-              <div>
-                <p className="font-semibold">Renégocier contrat fournisseur Contacteurs Schneider</p>
-                <p className="text-sm text-muted-foreground">
-                  Lead time 14j trop long. Opportunité: -20% coût si commande groupée trimestrielle
-                </p>
-              </div>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <div className="rounded-md border border-dashed p-4">
+              En attente de recommandations — importez davantage d'historique pour activer le modèle.
             </div>
           </CardContent>
         </Card>

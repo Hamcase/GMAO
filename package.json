@@ -40,13 +40,11 @@
   },
   "devDependencies": {
     "@manypkg/cli": "^0.25.1",
+    "@supabase/ssr": "^0.7.0",
     "@turbo/gen": "^2.5.8",
     "cross-env": "^10.1.0",
     "prettier": "^3.6.2",
     "turbo": "2.5.8",
     "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "@supabase/ssr": "^0.7.0"
   }
 }

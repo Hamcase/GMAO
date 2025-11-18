@@ -44,4 +44,11 @@ yarn-error.log*
 .zed
 
 # contentlayer
+# contentlayer
 .contentlayer/
+
+# temp data samples (actual user data, should not be committed)
+temp-data-samples/*.xlsx
+temp-data-samples/*.csv
+temp-data-samples/*.xls
+!temp-data-samples/README.md

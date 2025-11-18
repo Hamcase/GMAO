@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { AppBreadcrumbs } from '@kit/ui/app-breadcrumbs';
-import { createClient } from '~/lib/supabase-browser-client';
-import { ETLJobsTable } from '~/components/etl-jobs-table';
 import { ExportPDFButton } from '~/components/export-pdf-button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@kit/ui/card';
 import { Badge } from '@kit/ui/badge';
@@ -11,26 +9,20 @@ import { Button } from '@kit/ui/button';
 import { Switch } from '@kit/ui/switch';
 import { Label } from '@kit/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kit/ui/select';
-import { ScrollArea } from '@kit/ui/scroll-area';
 import { 
   Activity, 
   TrendingUp, 
   TrendingDown, 
   Clock, 
-  Wrench, 
   Users, 
   CheckCircle2, 
-  AlertTriangle,
-  Cpu,
-  Database,
   BarChart3,
   Factory,
   Sparkles,
   Target,
   Zap,
   ListTodo,
-  Filter,
-  Calendar
+  Filter
 } from 'lucide-react';
 import {
   LineChart,
@@ -49,116 +41,14 @@ import {
   Legend,
   ResponsiveContainer,
   Cell,
-  PieChart,
-  Pie,
   ComposedChart,
 } from 'recharts';
+import { useKpis, useAggregatedKpiAverages, useWorkOrders } from '@kit/shared/localdb/hooks';
 
-// Données mockées pour MTBF/MTTR
-const mtbfMttrData = [
-  { month: 'Jan', mtbf: 168, mttr: 2.5, predicted: 175 },
-  { month: 'Fév', mtbf: 172, mttr: 2.3, predicted: 180 },
-  { month: 'Mar', mtbf: 165, mttr: 2.8, predicted: 185 },
-  { month: 'Avr', mtbf: 180, mttr: 2.1, predicted: 190 },
-  { month: 'Mai', mtbf: 185, mttr: 1.9, predicted: 195 },
-  { month: 'Juin', mtbf: 190, mttr: 1.8, predicted: 200 },
-];
+// Helpers
+const MONTHS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jui', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
 
-// Disponibilité par équipement
-const availabilityData = [
-  { equipment: 'Compresseur A1', availability: 98.5, status: 'excellent' },
-  { equipment: 'Pompe P12', availability: 95.2, status: 'good' },
-  { equipment: 'Moteur M8', availability: 89.1, status: 'warning' },
-  { equipment: 'Convoyeur C3', availability: 85.3, status: 'warning' },
-  { equipment: 'Robot R5', availability: 92.7, status: 'good' },
-];
-
-// Charge par technicien
-const technicianWorkload = [
-  { name: 'Jean Dupont', planned: 12, completed: 10, inProgress: 2, utilization: 85 },
-  { name: 'Marie Martin', planned: 15, completed: 14, inProgress: 1, utilization: 93 },
-  { name: 'Paul Bernard', planned: 10, completed: 8, inProgress: 2, utilization: 80 },
-  { name: 'Sophie Laurent', planned: 13, completed: 11, inProgress: 2, utilization: 88 },
-];
-
-// Priorités de formation
-const trainingPriorities = [
-  { skill: 'Électrique', current: 75, target: 90 },
-  { skill: 'Mécanique', current: 85, target: 90 },
-  { skill: 'Hydraulique', current: 65, target: 85 },
-  { skill: 'Pneumatique', current: 70, target: 85 },
-  { skill: 'Automatisme', current: 60, target: 80 },
-  { skill: 'Sécurité', current: 90, target: 95 },
-];
-
-// Jobs ETL
-const etlJobs = [
-  { id: 1, name: 'MTBF Calculation', status: 'success', lastRun: '2 min ago', duration: '1.2s' },
-  { id: 2, name: 'MTTR Analytics', status: 'success', lastRun: '5 min ago', duration: '0.8s' },
-  { id: 3, name: 'Availability ETL', status: 'running', lastRun: 'En cours...', duration: '-' },
-  { id: 4, name: 'Workload Sync', status: 'success', lastRun: '10 min ago', duration: '2.1s' },
-];
-
-// Données Pareto (80/20)
-const paretoData = [
-  { cause: 'Usure roulements', failures: 42, cumulative: 42 },
-  { cause: 'Fuite hydraulique', failures: 28, cumulative: 70 },
-  { cause: 'Surchauffe moteur', failures: 18, cumulative: 88 },
-  { cause: 'Défaut électrique', failures: 8, cumulative: 96 },
-  { cause: 'Autres', failures: 4, cumulative: 100 },
-];
-
-// OEE Components
-const oeeData = {
-  availability: 92.1,
-  performance: 88.5,
-  quality: 96.2,
-  oee: 78.4, // 92.1 × 88.5 × 96.2 / 10000
-};
-
-// 5S Audit
-const fiveSData = [
-  { aspect: 'Seiri (Tri)', score: 85 },
-  { aspect: 'Seiton (Rangement)', score: 78 },
-  { aspect: 'Seiso (Nettoyage)', score: 92 },
-  { aspect: 'Seiketsu (Standardiser)', score: 75 },
-  { aspect: 'Shitsuke (Discipline)', score: 88 },
-];
-
-// Kanban Board Data Types
-type KanbanItem = {
-  id: number;
-  title: string;
-  equipment: string;
-  priority: string;
-  assignee: string;
-  reason?: string;
-};
-
-type KanbanData = {
-  todo: KanbanItem[];
-  inProgress: KanbanItem[];
-  blocked: KanbanItem[];
-  done: KanbanItem[];
-};
-
-const kanbanData: KanbanData = {
-  todo: [
-    { id: 1, title: 'Révision Compresseur A1', equipment: 'Compresseur A1', priority: 'high', assignee: 'Jean Dupont' },
-    { id: 2, title: 'Changement filtres Pompe P12', equipment: 'Pompe P12', priority: 'medium', assignee: 'Marie Martin' },
-  ],
-  inProgress: [
-    { id: 3, title: 'Réparation Moteur M8', equipment: 'Moteur M8', priority: 'high', assignee: 'Paul Bernard' },
-    { id: 4, title: 'Calibration Robot R5', equipment: 'Robot R5', priority: 'low', assignee: 'Sophie Laurent' },
-  ],
-  blocked: [
-    { id: 5, title: 'Remplacement Convoyeur C3', equipment: 'Convoyeur C3', priority: 'critical', assignee: 'Jean Dupont', reason: 'Pièce en commande' },
-  ],
-  done: [
-    { id: 6, title: 'Lubrification Ligne 1', equipment: 'Ligne 1', priority: 'medium', assignee: 'Marie Martin' },
-    { id: 7, title: 'Test CVC', equipment: 'Système CVC', priority: 'low', assignee: 'Paul Bernard' },
-  ],
-};
+// Note: sections historiques mockées (formation, OEE, 5S, Kanban) remplacées par données dynamiques ou états vides
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -179,84 +69,163 @@ const getPriorityColor = (priority: string) => {
   }
 };
 
+// Helpers for fallbacks
+function getWindowHours(period: string): number {
+  switch (period) {
+    case '7days': return 7 * 24;
+    case '30days': return 30 * 24;
+    case '90days': return 90 * 24;
+    case '6months': return 6 * 30 * 24;
+    case '1year': return 365 * 24;
+    default: return 30 * 24;
+  }
+}
+
+function clampPct(v: number): number {
+  return Math.max(0, Math.min(100, Number.isFinite(v) ? v : 0));
+}
+
+function getDowntimeHours(wo: any, s?: Date | null, e?: Date | null): number {
+  const downtime = Number(wo.downtimeHours ?? wo.downtime ?? wo['Durée arrêt (h)'] ?? wo['Duree arret (h)'] ?? 0);
+  if (downtime && Number.isFinite(downtime) && downtime > 0) return downtime;
+  if (s && e && e > s) return (e.getTime() - s.getTime()) / 3600000;
+  return 0;
+}
+
+function computeFallbackAggregates(workOrders: any[], selectedPeriod: string): { mtbf: number|null; mttr: number|null; availability: number|null } {
+  if (!workOrders || !workOrders.length) return { mtbf: null, mttr: null, availability: null };
+  const now = new Date();
+  const windowHours = getWindowHours(selectedPeriod);
+  const windowStart = new Date(now.getTime() - windowHours * 3600000);
+  const perAsset: Record<string, { dtSum: number; count: number; mttrSum: number; mttrN: number }> = {};
+  for (const wo of workOrders) {
+    const asset = wo.assetCode || wo.asset || wo.machine || 'N/A';
+    const s = wo.startAt ? new Date(wo.startAt) : null;
+    const e = wo.endAt ? new Date(wo.endAt) : null;
+    const inWindow = (s && s >= windowStart) || (e && e >= windowStart);
+    if (!inWindow) continue;
+    const dt = getDowntimeHours(wo, s, e);
+    if (!perAsset[asset]) perAsset[asset] = { dtSum: 0, count: 0, mttrSum: 0, mttrN: 0 };
+    perAsset[asset].dtSum += dt;
+    perAsset[asset].count += 1;
+    if (s && e && e > s) {
+      perAsset[asset].mttrSum += (e.getTime() - s.getTime()) / 3600000;
+      perAsset[asset].mttrN += 1;
+    } else if (dt > 0) {
+      perAsset[asset].mttrSum += dt;
+      perAsset[asset].mttrN += 1;
+    }
+  }
+  const mtbfList: number[] = [];
+  const mttrList: number[] = [];
+  const availList: number[] = [];
+  Object.values(perAsset).forEach(v => {
+    if (v.count > 0) {
+      const uptime = Math.max(0, windowHours - v.dtSum);
+      const mtbf = uptime / v.count;
+      if (Number.isFinite(mtbf) && mtbf >= 0) mtbfList.push(mtbf);
+      const mttr = v.mttrN ? v.mttrSum / v.mttrN : 0;
+      if (Number.isFinite(mttr) && mttr >= 0) mttrList.push(mttr);
+      const availability = clampPct(100 * (1 - (v.dtSum / Math.max(1, windowHours))));
+      availList.push(availability);
+    }
+  });
+  const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  return { mtbf: avg(mtbfList), mttr: avg(mttrList), availability: avg(availList) };
+}
+
 export default function DashboardPage() {
+  // Using local IndexedDB instead of // supabase
   const [aiEnabled, setAiEnabled] = useState(false);
   const [activeTab, setActiveTab] = useState<'kpis' | 'lean' | 'kanban'>('kpis');
-  const [realKpiData, setRealKpiData] = useState<any>(null);
-  const [realWorkloadData, setRealWorkloadData] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  
+  // Local DB hooks - live reactive queries
+  const kpiData = useKpis();
+  const aggregatedKpis = useAggregatedKpiAverages();
+  const workOrders = useWorkOrders();
+  
+  // Debug: Log data to verify database state
+  useEffect(() => {
+    console.log('📊 Dashboard data state:', {
+      kpiCount: kpiData?.length ?? 0,
+      workOrderCount: workOrders?.length ?? 0,
+      aggregatedKpis,
+      sampleKpi: kpiData?.[0]
+    });
+  }, [kpiData, workOrders, aggregatedKpis]);
   
   // Filter states
   const [selectedMachine, setSelectedMachine] = useState<string>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<string>('30days');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
-
-  // Fetch real data from Supabase
-  useEffect(() => {
-    async function fetchData() {
-      const supabase = createClient();
-      
-      // Fetch KPI data
-      const { data: kpiData } = await supabase
-        .from('view_asset_kpis')
-        .select('*')
-        .limit(10);
-      
-      // Fetch technician workload
-      const { data: workloadData } = await supabase
-        .from('view_technician_workload')
-        .select('*');
-
-      setRealKpiData(kpiData);
-      setRealWorkloadData(workloadData || []);
-      setIsLoading(false);
-    }
-
-    fetchData();
-  }, []);
-
-  // Calculate aggregates from real data
-  const avgMtbf = realKpiData && realKpiData.length > 0 
-    ? Math.round(realKpiData.reduce((sum: number, row: any) => sum + (row.mtbf_hours || 0), 0) / realKpiData.length)
-    : null;
   
-  const avgMttr = realKpiData && realKpiData.length > 0
-    ? (realKpiData.reduce((sum: number, row: any) => sum + (row.mttr_hours || 0), 0) / realKpiData.length).toFixed(1)
+  // Derive machine options from KPI data
+  const machineOptions = kpiData 
+    ? Array.from(new Set(kpiData.map(k => k.assetCode).filter(Boolean)))
+    : [];
+  
+  // Build workload data from work orders
+  const workloadData = workOrders 
+    ? Object.values(
+        workOrders.reduce((acc: any, wo) => {
+          const tech = wo.assignee?.trim();
+          if (!tech) return acc;
+          if (!acc[tech]) {
+            acc[tech] = { technician_name: tech, completed: 0, in_progress: 0, planned: 0, utilization_pct: 0 };
+          }
+          if (wo.endAt) acc[tech].completed += 1;
+          else if (wo.startAt) acc[tech].in_progress += 1;
+          else acc[tech].planned += 1;
+          return acc;
+        }, {})
+      )
+    : [];
+  
+  const isLoading = !kpiData; // Data is loading if hooks haven't returned yet
+
+  // Use aggregated KPI averages from the hook (already calculated)
+  const avgMtbf = aggregatedKpis?.mtbf ?? null;
+  const avgMttr = aggregatedKpis?.mttr ?? null;
+  const avgAvailability = aggregatedKpis?.availability ?? null;
+
+  const avgUtilization = workloadData.length > 0
+    ? (workloadData.reduce((sum: number, row: any) => sum + (row.utilization_pct || 0), 0) / workloadData.length).toFixed(1)
     : null;
 
-  const avgAvailability = realKpiData && realKpiData.length > 0
-    ? (realKpiData.reduce((sum: number, row: any) => sum + (row.availability_pct || 0), 0) / realKpiData.length).toFixed(1)
-    : null;
-
-  const avgUtilization = realWorkloadData.length > 0
-    ? (realWorkloadData.reduce((sum: number, row: any) => sum + (row.utilization_pct || 0), 0) / realWorkloadData.length).toFixed(1)
-    : null;
+  // Group KPIs by asset for table display
+  const kpisByAsset: Record<string, { mtbf?: number; mttr?: number; availability?: number; assetCode: string }> = {};
+  if (kpiData) {
+    kpiData.forEach((row) => {
+      const key = row.assetCode;
+      if (!kpisByAsset[key]) kpisByAsset[key] = { assetCode: key };
+      if (row.metricType === 'mtbf') kpisByAsset[key].mtbf = row.metricValue;
+      else if (row.metricType === 'mttr') kpisByAsset[key].mttr = row.metricValue;
+      else if (row.metricType === 'availability') kpisByAsset[key].availability = row.metricValue;
+    });
+  }
+  const pivotedKpis = Object.values(kpisByAsset);
 
   // Prepare export data for PDF
   const dashboardExportData = {
     kpis: [
-      { label: 'MTBF Moyen', value: avgMtbf ? `${avgMtbf} heures` : '190 heures' },
-      { label: 'MTTR Moyen', value: avgMttr ? `${avgMttr} heures` : '1.8 heures' },
-      { label: 'Disponibilité', value: avgAvailability ? `${avgAvailability}%` : '92.1%' },
-      { label: 'Utilisation', value: avgUtilization ? `${avgUtilization}%` : '86.5%' },
-      { label: 'Techniciens actifs', value: realWorkloadData.length || '12' },
-      { label: 'Machines critiques', value: '8' },
+      { label: 'MTBF Moyen', value: avgMtbf ? `${avgMtbf.toFixed(1)} heures` : '—' },
+      { label: 'MTTR Moyen', value: avgMttr ? `${avgMttr.toFixed(1)} heures` : '—' },
+      { label: 'Disponibilité', value: avgAvailability ? `${avgAvailability.toFixed(1)}%` : '—' },
+      { label: 'Utilisation', value: avgUtilization ? `${avgUtilization}%` : '—' },
+      { label: 'Techniciens actifs', value: String(workloadData.length || 0) },
+      { label: 'Machines suivies', value: String(machineOptions.length || 0) },
     ],
     table: {
       headers: ['Machine', 'MTBF (h)', 'MTTR (h)', 'Disponibilité (%)', 'Statut'],
-      rows: realKpiData && realKpiData.length > 0 
-        ? realKpiData.slice(0, 10).map((row: any) => ({
-            machine: row.asset_name || 'N/A',
-            mtbf: row.mtbf_hours?.toFixed(1) || 'N/A',
-            mttr: row.mttr_hours?.toFixed(1) || 'N/A',
-            availability: row.availability_pct?.toFixed(1) || 'N/A',
-            status: row.availability_pct > 95 ? 'Excellent' : row.availability_pct > 85 ? 'Bon' : 'Attention',
+      rows: pivotedKpis.length
+        ? pivotedKpis.slice(0, 10).map((k: any) => ({
+            machine: k.assetCode || 'N/A',
+            mtbf: k.mtbf?.toFixed(1) || 'N/A',
+            mttr: k.mttr?.toFixed(1) || 'N/A',
+            availability: k.availability?.toFixed(1) || 'N/A',
+            status: (k.availability || 0) > 95 ? 'Excellent' : (k.availability || 0) > 85 ? 'Bon' : 'Attention',
           }))
-        : [
-            { machine: 'Compresseur A1', mtbf: '190', mttr: '1.8', availability: '95.2', status: 'Excellent' },
-            { machine: 'Pompe B2', mtbf: '156', mttr: '2.1', availability: '89.4', status: 'Bon' },
-            { machine: 'Convoyeur C3', mtbf: '220', mttr: '1.2', availability: '97.8', status: 'Excellent' },
-          ],
+        : [],
     },
   };
 
@@ -301,11 +270,9 @@ export default function DashboardPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Toutes les machines</SelectItem>
-                  <SelectItem value="compresseur-a1">Compresseur A1</SelectItem>
-                  <SelectItem value="pompe-b2">Pompe B2</SelectItem>
-                  <SelectItem value="convoyeur-c3">Convoyeur C3</SelectItem>
-                  <SelectItem value="moteur-d4">Moteur D4</SelectItem>
-                  <SelectItem value="chaudiere-e5">Chaudière E5</SelectItem>
+                  {machineOptions.map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -466,9 +433,6 @@ export default function DashboardPage() {
               <p className="font-semibold text-purple-900 dark:text-purple-100">
                 IA activée - Prédictions en temps réel
               </p>
-              <p className="text-sm text-purple-700 dark:text-purple-300">
-                ⚠️ Risque de panne Compresseur A1 dans 3 jours • Recommandation: Planifier maintenance préventive
-              </p>
             </div>
           </CardContent>
         </Card>
@@ -477,13 +441,21 @@ export default function DashboardPage() {
       {/* Contenu selon l'onglet actif */}
       {activeTab === 'kpis' && (
         <KPIsTab 
-          aiEnabled={aiEnabled} 
+          aiEnabled={aiEnabled}
           selectedMachine={selectedMachine}
           selectedPeriod={selectedPeriod}
           selectedStatus={selectedStatus}
+          kpiData={kpiData || []}
+          workloadData={workloadData}
+          workOrders={workOrders || []}
         />
       )}
-      {activeTab === 'lean' && <LeanAnalyticsTab />}
+      {activeTab === 'lean' && (
+        <LeanAnalyticsTab 
+          workOrders={workOrders || []}
+          kpiData={kpiData || []}
+        />
+      )}
       {activeTab === 'kanban' && <KanbanBoardTab />}
     </div>
   );
@@ -494,66 +466,163 @@ function KPIsTab({
   aiEnabled, 
   selectedMachine, 
   selectedPeriod, 
-  selectedStatus 
+  selectedStatus,
+  kpiData: propKpiData,
+  workloadData: propWorkloadData,
+  workOrders: propWorkOrders
 }: { 
   aiEnabled: boolean;
   selectedMachine: string;
   selectedPeriod: string;
   selectedStatus: string;
+  kpiData: any[];
+  workloadData: any[];
+  workOrders: any[];
 }) {
-  // Real-time data from Supabase
-  const [realKpiData, setRealKpiData] = useState<any>(null);
-  const [realWorkloadData, setRealWorkloadData] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [mtbfMttrSeries, setMtbfMttrSeries] = useState<any[]>([]);
+  const [availabilityList, setAvailabilityList] = useState<any[]>([]);
+  const [workloadStack, setWorkloadStack] = useState<any[]>([]);
+  const [fallbackAgg, setFallbackAgg] = useState<{ mtbf: number|null; mttr: number|null; availability: number|null }>({ mtbf: null, mttr: null, availability: null });
+  const [periodAgg, setPeriodAgg] = useState<{ mtbf: number|null; mttr: number|null; availability: number|null }>({ mtbf: null, mttr: null, availability: null });
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const supabase = createClient();
-
-        // Fetch asset KPIs
-        const { data: kpiData } = await supabase
-          .from('view_asset_kpis')
-          .select('*')
-          .limit(10);
-
-        // Fetch technician workload
-        const { data: workloadData } = await supabase
-          .from('view_technician_workload')
-          .select('*');
-
-        setRealKpiData(kpiData);
-        setRealWorkloadData(workloadData || []);
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-      } finally {
-        setIsLoading(false);
-      }
+    const windowHours = getWindowHours(selectedPeriod);
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - windowHours * 3600000);
+    const inWindowPeriod = (periodStr: string) => {
+      if (!periodStr) return false;
+      const [y, m] = periodStr.split('-').map(Number);
+      if (!y || !m) return false;
+      const d = new Date(y, m - 1, 1);
+      return d >= windowStart && d <= now;
     };
 
-    fetchData();
-  }, []);
+    const kpisFiltered = propKpiData.filter((k: any) => inWindowPeriod(k.period || ''));
 
-  // Calculate aggregated KPIs from real data
-  const avgMtbf = realKpiData?.length
-    ? Math.round(realKpiData.reduce((sum: number, k: any) => sum + (k.mtbf_hours || 0), 0) / realKpiData.length)
-    : null;
+    // Monthly series
+    const monthlyData: Record<string, { month: string; mtbf?: number; mttr?: number; count: number }> = {};
+    propWorkOrders.forEach((wo: any) => {
+      if (!wo.startAt) return;
+      const date = wo.startAt instanceof Date ? wo.startAt : new Date(wo.startAt);
+      if (date < windowStart || date > now) return;
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthlyData[monthKey]) monthlyData[monthKey] = { month: monthKey, count: 0 };
+      monthlyData[monthKey].count += 1;
+    });
+    kpisFiltered.forEach((kpi: any) => {
+      const monthKey = kpi.period;
+      if (!monthlyData[monthKey]) monthlyData[monthKey] = { month: monthKey, count: 0 };
+      const type = (kpi.metricType || '').toLowerCase();
+      if (type === 'mtbf') monthlyData[monthKey].mtbf = kpi.metricValue;
+      if (type === 'mttr') monthlyData[monthKey].mttr = kpi.metricValue;
+    });
+    const series = Object.values(monthlyData).sort((a,b) => a.month.localeCompare(b.month));
+    setMtbfMttrSeries(series.slice(-12));
 
-  const avgMttr = realKpiData?.length
-    ? (realKpiData.reduce((sum: number, k: any) => sum + (k.mttr_hours || 0), 0) / realKpiData.length).toFixed(1)
-    : null;
+    // Availability list
+    let availList = kpisFiltered
+      .filter((k: any) => (k.metricType || '').toLowerCase() === 'availability')
+      .map((k: any) => ({ asset: k.assetCode, availability: Number(k.metricValue) }))
+      .slice(0, 10);
+    if (!availList.length && propWorkOrders?.length) {
+      const hoursMap: Record<string, { downtime: number; count: number }> = {};
+      propWorkOrders.forEach((wo: any) => {
+        const s = wo.startAt ? new Date(wo.startAt) : null;
+        const e = wo.endAt ? new Date(wo.endAt) : null;
+        const inWindow = (s && s >= windowStart) || (e && e >= windowStart);
+        if (!inWindow) return;
+        const asset = wo.assetCode || wo.asset || wo.machine || 'N/A';
+        const dt = getDowntimeHours(wo, s, e);
+        if (!hoursMap[asset]) hoursMap[asset] = { downtime: 0, count: 0 };
+        hoursMap[asset].downtime += dt;
+        hoursMap[asset].count += 1;
+      });
+      availList = Object.entries(hoursMap).map(([asset, v]) => {
+        const availability = clampPct(100 * (1 - (v.downtime / Math.max(1, windowHours))));
+        return { asset, availability };
+      }).slice(0, 10);
+    }
+    availList = availList.map((row: any) => ({
+      ...row,
+      status: row.availability > 95 ? 'excellent' : row.availability > 85 ? 'good' : 'warning',
+    }));
+    setAvailabilityList(availList);
 
-  const avgAvailability = realKpiData?.length
-    ? (realKpiData.reduce((sum: number, k: any) => sum + (k.availability_pct || 0), 0) / realKpiData.length).toFixed(1)
-    : null;
+    // Workload stack
+    const wl = (propWorkloadData || []).map((r: any) => ({
+      name: r.name || r.technician_name || r.technician || '—',
+      completed: r.completed ?? 0,
+      inProgress: r.inProgress ?? r.in_progress ?? 0,
+      planned: r.planned ?? 0,
+      utilization: r.utilization ?? r.utilization_pct ?? 0,
+    }));
+    setWorkloadStack(wl);
 
-  const avgUtilization = realWorkloadData?.length
-    ? (realWorkloadData.reduce((sum: number, w: any) => sum + (w.utilization_pct || 0), 0) / realWorkloadData.length).toFixed(1)
+    // Period aggregates from work orders
+    const periodAggregates = computeFallbackAggregates(propWorkOrders, selectedPeriod);
+    setPeriodAgg(periodAggregates);
+
+    // Fallback usage
+    const mtbfPresent = kpisFiltered.some((k: any) => (k.metricType || '').toLowerCase() === 'mtbf');
+    const mttrPresent = kpisFiltered.some((k: any) => (k.metricType || '').toLowerCase() === 'mttr');
+    const availPresent = kpisFiltered.some((k: any) => (k.metricType || '').toLowerCase() === 'availability');
+    if (!(mtbfPresent && mttrPresent && availPresent)) {
+      setFallbackAgg(periodAggregates);
+    } else {
+      setFallbackAgg({ mtbf: null, mttr: null, availability: null });
+    }
+  }, [propKpiData, propWorkloadData, propWorkOrders, selectedPeriod]);
+
+  const kpiData = propKpiData.filter((k: any) => {
+    const [y, m] = (k.period || '').split('-').map(Number);
+    if (!y || !m) return false;
+    const d = new Date(y, m - 1, 1);
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - getWindowHours(selectedPeriod) * 3600000);
+    return d >= windowStart && d <= now;
+  });
+  const workloadData = propWorkloadData;
+  const isLoading = false; // Data comes from props
+
+  // Calculate aggregated KPIs from real data (pivot metric rows)
+  const kpisByAssetPeriod2: Record<string, { mtbf?: number; mttr?: number; availability?: number }> = {};
+  if (kpiData && Array.isArray(kpiData)) {
+    kpiData.forEach((row: any) => {
+      const key = `${row.assetCode || ''}|${row.period || ''}`;
+      if (!kpisByAssetPeriod2[key]) kpisByAssetPeriod2[key] = {};
+      const metric = (row.metricType || '').toLowerCase();
+      const val = Number(row.metricValue) || 0;
+      if (metric === 'mtbf') kpisByAssetPeriod2[key].mtbf = val;
+      else if (metric === 'mttr') kpisByAssetPeriod2[key].mttr = val;
+      else if (metric === 'availability') kpisByAssetPeriod2[key].availability = val;
+    });
+  }
+  const pivotedKpis2 = Object.values(kpisByAssetPeriod2);
+
+  const avgMtbf = (() => {
+    const mtbfValues = pivotedKpis2.map((k: any) => k.mtbf).filter((v: any) => v !== undefined && v !== null);
+    if (mtbfValues.length) return Math.round(mtbfValues.reduce((a: number, b: number) => a + b, 0) / mtbfValues.length);
+    return fallbackAgg.mtbf !== null ? Math.round(fallbackAgg.mtbf) : (periodAgg.mtbf !== null ? Math.round(periodAgg.mtbf) : null);
+  })();
+
+  const avgMttr = (() => {
+    const mttrValues = pivotedKpis2.map((k: any) => k.mttr).filter((v: any) => v !== undefined && v !== null);
+    if (mttrValues.length) return (mttrValues.reduce((a: number, b: number) => a + b, 0) / mttrValues.length).toFixed(1);
+    return fallbackAgg.mttr !== null ? fallbackAgg.mttr.toFixed(1) : (periodAgg.mttr !== null ? periodAgg.mttr.toFixed(1) : null);
+  })();
+
+  const avgAvailability = (() => {
+    const aVals = pivotedKpis2.map((k: any) => k.availability).filter((v: any) => v !== undefined && v !== null);
+    if (aVals.length) return (aVals.reduce((a: number, b: number) => a + b, 0) / aVals.length).toFixed(1);
+    return fallbackAgg.availability !== null ? fallbackAgg.availability.toFixed(1) : (periodAgg.availability !== null ? periodAgg.availability.toFixed(1) : null);
+  })();
+
+  const avgUtilization = workloadData?.length
+    ? (workloadData.reduce((sum: number, w: any) => sum + (w.utilization || w.utilization_pct || 0), 0) / workloadData.length).toFixed(1)
     : null;
 
   return (
     <>
-
       {/* Hero Section - KPIs principaux */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* MTBF */}
@@ -568,26 +637,23 @@ function KPIsTab({
                 <span className="animate-pulse">...</span>
               ) : avgMtbf ? (
                 <>
-                  {aiEnabled ? `${Math.round(avgMtbf * 1.05)} heures` : `${avgMtbf} heures`}
-                  <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  {`${avgMtbf} heures`}
+                  {kpiData?.length ? (
+                    <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  ) : null}
                 </>
               ) : (
                 <>
-                  {aiEnabled ? '200 heures' : '190 heures'}
-                  {aiEnabled && <Badge className="bg-purple-500 text-xs">IA</Badge>}
+                  {periodAgg.mtbf !== null ? `${Math.round(periodAgg.mtbf)} heures` : '—'}
                 </>
               )}
             </div>
             <p className="flex items-center text-xs text-muted-foreground">
               <TrendingUp className="mr-1 h-3 w-3 text-green-500" />
-              {avgMtbf ? 'Calculé depuis vos données' : (aiEnabled ? '+10h prédit' : '+12% vs mois dernier')}
+              {avgMtbf ? 'Calculé depuis vos données' : 'En attente de données'}
             </p>
-            {!avgMtbf && !aiEnabled && (
-              <div className="mt-2">
-                <Badge variant="outline" className="text-xs">
-                  Prédiction IA: 200h
-                </Badge>
-              </div>
+            {!avgMtbf && periodAgg.mtbf === null && (
+              <div className="mt-2 text-xs text-muted-foreground">Aucune donnée MTBF disponible</div>
             )}
           </CardContent>
         </Card>
@@ -604,19 +670,20 @@ function KPIsTab({
                 <span className="animate-pulse">...</span>
               ) : avgMttr ? (
                 <>
-                  {aiEnabled ? `${(parseFloat(avgMttr) * 0.85).toFixed(1)} heures` : `${avgMttr} heures`}
-                  <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  {`${avgMttr} heures`}
+                  {kpiData?.length ? (
+                    <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  ) : null}
                 </>
               ) : (
                 <>
-                  {aiEnabled ? '1.5 heures' : '1.8 heures'}
-                  {aiEnabled && <Badge className="bg-purple-500 text-xs">IA</Badge>}
+                  {periodAgg.mttr !== null ? `${periodAgg.mttr.toFixed(1)} heures` : '—'}
                 </>
               )}
             </div>
             <p className="flex items-center text-xs text-muted-foreground">
               <TrendingDown className="mr-1 h-3 w-3 text-green-500" />
-              {avgMttr ? 'Calculé depuis vos données' : (aiEnabled ? '-0.3h optimisé' : '-24% vs mois dernier')}
+              {avgMttr || periodAgg.mttr ? 'Calculé depuis vos données' : 'En attente de données'}
             </p>
             <div className="mt-2">
               <Badge variant="outline" className="text-xs">
@@ -638,19 +705,20 @@ function KPIsTab({
                 <span className="animate-pulse">...</span>
               ) : avgAvailability ? (
                 <>
-                  {aiEnabled ? `${(parseFloat(avgAvailability) * 1.02).toFixed(1)}%` : `${avgAvailability}%`}
-                  <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  {`${avgAvailability}%`}
+                  {kpiData?.length ? (
+                    <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  ) : null}
                 </>
               ) : (
                 <>
-                  {aiEnabled ? '94.5%' : '92.1%'}
-                  {aiEnabled && <Badge className="bg-purple-500 text-xs">IA</Badge>}
+                  {periodAgg.availability !== null ? `${periodAgg.availability.toFixed(1)}%` : '—'}
                 </>
               )}
             </div>
             <p className="flex items-center text-xs text-muted-foreground">
               <TrendingUp className="mr-1 h-3 w-3 text-green-500" />
-              {avgAvailability ? 'Calculé depuis vos données' : (aiEnabled ? '+2.4% avec maintenance prédictive' : '+3.2% vs mois dernier')}
+              {avgAvailability || periodAgg.availability ? 'Calculé depuis vos données' : 'En attente de données'}
             </p>
             <div className="mt-2">
               <Badge className="bg-green-500 text-xs">Excellent</Badge>
@@ -670,13 +738,14 @@ function KPIsTab({
                 <span className="animate-pulse">...</span>
               ) : avgUtilization ? (
                 <>
-                  {aiEnabled ? `${(parseFloat(avgUtilization) * 0.95).toFixed(1)}%` : `${avgUtilization}%`}
-                  <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  {`${avgUtilization}%`}
+                  {workloadData?.length ? (
+                    <Badge className="bg-green-500 text-xs">REAL DATA</Badge>
+                  ) : null}
                 </>
               ) : (
                 <>
-                  {aiEnabled ? '82.0%' : '86.5%'}
-                  {aiEnabled && <Badge className="bg-purple-500 text-xs">IA</Badge>}
+                  {workloadData.length === 0 ? '—' : '0%'}
                 </>
               )}
             </div>
@@ -684,17 +753,12 @@ function KPIsTab({
               {avgUtilization ? (
                 <>
                   <Activity className="mr-1 h-3 w-3 text-blue-500" />
-                  {realWorkloadData.length} techniciens actifs
-                </>
-              ) : aiEnabled ? (
-                <>
-                  <TrendingDown className="mr-1 h-3 w-3 text-orange-500" />
-                  -4.5% (maintenance préventive)
+                  {workloadData.length} techniciens actifs
                 </>
               ) : (
                 <>
                   <Activity className="mr-1 h-3 w-3 text-blue-500" />
-                  4 techniciens actifs
+                  {workloadData.length} techniciens actifs
                 </>
               )}
             </p>
@@ -703,9 +767,14 @@ function KPIsTab({
                 Optimal: 80-90%
               </Badge>
             </div>
+            {workloadData.length === 0 && (
+              <div className="mt-2 text-xs text-muted-foreground">Ajoutez une colonne "assignee" dans vos CSV pour voir l'utilisation équipe.</div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Supabase section removed: now local-only KPIs */}
 
       {/* Section Graphiques */}
       <div className="grid gap-4 md:grid-cols-2">
@@ -721,8 +790,9 @@ function KPIsTab({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={mtbfMttrData}>
+            {mtbfMttrSeries.length ? (
+              <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={mtbfMttrSeries}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="month" />
                 <YAxis yAxisId="left" />
@@ -745,17 +815,11 @@ function KPIsTab({
                   strokeWidth={2}
                   name="MTTR (heures)"
                 />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="predicted"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  strokeDasharray="5 5"
-                  name="Prédiction IA"
-                />
               </LineChart>
             </ResponsiveContainer>
+            ) : (
+              <div className="flex h-72 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">Aucune série MTBF/MTTR disponible</div>
+            )}
           </CardContent>
         </Card>
 
@@ -771,24 +835,28 @@ function KPIsTab({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={availabilityData} layout="vertical">
+            {availabilityList.length ? (
+              <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={availabilityList} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis type="number" domain={[0, 100]} />
-                <YAxis dataKey="equipment" type="category" width={100} />
+                <YAxis dataKey="asset" type="category" width={100} />
                 <Tooltip />
                 <Bar dataKey="availability" name="Disponibilité (%)">
-                  {availabilityData.map((entry, index) => (
+                  {availabilityList.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={getStatusColor(entry.status)} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            ) : (
+              <div className="flex h-72 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">Aucune disponibilité machine</div>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Section Charge Techniciens et Formation */}
+      {/* Section Charge Techniciens */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* Charge par technicien */}
         <Card>
@@ -802,8 +870,9 @@ function KPIsTab({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={technicianWorkload}>
+            {workloadStack.length ? (
+              <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={workloadStack}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
                 <YAxis />
@@ -814,8 +883,11 @@ function KPIsTab({
                 <Bar dataKey="planned" fill="#e5e7eb" name="Planifiées" />
               </BarChart>
             </ResponsiveContainer>
+            ) : (
+              <div className="flex h-72 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">Aucune charge technicien</div>
+            )}
             <div className="mt-4 space-y-2">
-              {technicianWorkload.map((tech) => (
+              {workloadStack.map((tech) => (
                 <div key={tech.name} className="flex items-center justify-between text-sm">
                   <span className="font-medium">{tech.name}</span>
                   <Badge variant={tech.utilization > 90 ? 'destructive' : tech.utilization > 80 ? 'default' : 'secondary'}>
@@ -823,108 +895,79 @@ function KPIsTab({
                   </Badge>
                 </div>
               ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Priorités de formation */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wrench className="h-5 w-5 text-blue-500" />
-              Priorités de Formation
-            </CardTitle>
-            <CardDescription>
-              Compétences actuelles vs objectifs (IA)
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <RadarChart data={trainingPriorities}>
-                <PolarGrid />
-                <PolarAngleAxis dataKey="skill" />
-                <PolarRadiusAxis angle={90} domain={[0, 100]} />
-                <Radar
-                  name="Niveau actuel"
-                  dataKey="current"
-                  stroke="#3b82f6"
-                  fill="#3b82f6"
-                  fillOpacity={0.5}
-                />
-                <Radar
-                  name="Objectif"
-                  dataKey="target"
-                  stroke="#10b981"
-                  fill="#10b981"
-                  fillOpacity={0.2}
-                />
-                <Legend />
-                <Tooltip />
-              </RadarChart>
-            </ResponsiveContainer>
-            <div className="mt-4">
-              <Badge variant="outline" className="text-xs">
-                <Cpu className="mr-1 h-3 w-3" />
-                Recommandations générées par IA
-              </Badge>
+              {workloadStack.length === 0 && (
+                <div className="text-sm text-muted-foreground">Aucune donnée de charge disponible.</div>
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
-
-      {/* Section ETL Analytics */}
-      <ETLJobsTable />
+      
     </>
   );
 }
 
 // ========== ONGLET LEAN ANALYTICS ==========
-function LeanAnalyticsTab() {
+function LeanAnalyticsTab({ workOrders, kpiData }: { workOrders: any[]; kpiData: any[] }) {
+  const [cycleData, setCycleData] = useState<any[]>([]);
+  const [oeeData, setOeeData] = useState<{ availability: number; performance: number | null; quality: number | null; oee: number }>({ 
+    availability: 0, performance: null, quality: null, oee: 0 
+  });
+
+  useEffect(() => {
+    // 1. Calculate OEE from KPI data
+    const availKpis = kpiData.filter((k: any) => k.metricType === 'availability');
+    if (availKpis.length) {
+      const avgAvail = availKpis.reduce((s: number, k: any) => s + (Number(k.metricValue) || 0), 0) / availKpis.length;
+      const availability = Number(avgAvail.toFixed(1));
+      setOeeData({ availability, performance: null, quality: null, oee: availability });
+    }
+
+    // 2. Calculate cycle time distribution from work orders
+    if (workOrders && workOrders.length) {
+      const groups: Record<string, number[]> = {};
+      workOrders.forEach((wo: any) => {
+        const type = wo.type || 'Autre';
+        const typeCap = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+        
+        if (wo.startAt && wo.endAt) {
+          const start = wo.startAt instanceof Date ? wo.startAt : new Date(wo.startAt);
+          const end = wo.endAt instanceof Date ? wo.endAt : new Date(wo.endAt);
+          if (end > start) {
+            const hours = (end.getTime() - start.getTime()) / 3600000;
+            if (!groups[typeCap]) groups[typeCap] = [];
+            groups[typeCap].push(hours);
+          }
+        }
+      });
+
+      const cyData = Object.entries(groups).map(([type, arr]) => {
+        const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+        const min = Math.min(...arr);
+        const max = Math.max(...arr);
+        return { 
+          type, 
+          avg: Number(avg.toFixed(1)), 
+          min: Number(min.toFixed(1)), 
+          max: Number(max.toFixed(1)) 
+        };
+      });
+      setCycleData(cyData);
+    }
+  }, [workOrders, kpiData]);
+
   return (
     <>
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Pareto Chart - 80/20 Rule */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-purple-500" />
-              Analyse Pareto - Causes de Pannes (80/20)
-            </CardTitle>
-            <CardDescription>
-              80% des pannes proviennent de 20% des causes
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={paretoData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="cause" angle={-15} textAnchor="end" height={80} />
-                <YAxis yAxisId="left" label={{ value: 'Nombre de pannes', angle: -90, position: 'insideLeft' }} />
-                <YAxis yAxisId="right" orientation="right" label={{ value: '% Cumulatif', angle: 90, position: 'insideRight' }} />
-                <Tooltip />
-                <Legend />
-                <Bar yAxisId="left" dataKey="failures" fill="#8b5cf6" name="Pannes" />
-                <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#ef4444" strokeWidth={2} name="% Cumulatif" />
-              </ComposedChart>
-            </ResponsiveContainer>
-            <div className="mt-4 rounded-md bg-purple-50 p-3 dark:bg-purple-950">
-              <p className="text-sm text-purple-900 dark:text-purple-100">
-                <strong>Insight:</strong> 70% des pannes sont causées par usure roulements et fuites hydrauliques. 
-                Prioriser la maintenance préventive sur ces 2 causes pour un impact maximal.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* OEE Gauge */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Target className="h-5 w-5 text-green-500" />
-              OEE (Overall Equipment Effectiveness)
+              OEE (Proxy)
             </CardTitle>
             <CardDescription>
-              Disponibilité × Performance × Qualité
+              Basé sur la disponibilité des équipements
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -932,44 +975,115 @@ function LeanAnalyticsTab() {
               <div className="relative h-48 w-48">
                 <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
                   <circle cx="50" cy="50" r="40" fill="none" stroke="#e5e7eb" strokeWidth="8" />
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="40"
-                    fill="none"
-                    stroke="#10b981"
-                    strokeWidth="8"
-                    strokeDasharray={`${oeeData.oee * 2.51} 251`}
-                    strokeLinecap="round"
-                  />
+                  {oeeData.oee > 0 && (
+                    <circle
+                      cx="50"
+                      cy="50"
+                      r="40"
+                      fill="none"
+                      stroke="#10b981"
+                      strokeWidth="8"
+                      strokeDasharray={`${oeeData.oee * 2.51} 251`}
+                      strokeLinecap="round"
+                    />
+                  )}
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-4xl font-bold">{oeeData.oee}%</span>
-                  <span className="text-sm text-muted-foreground">OEE Total</span>
+                  <span className="text-4xl font-bold">{oeeData.oee ? `${oeeData.oee}%` : '—'}</span>
+                  <span className="text-xs text-muted-foreground">OEE (proxy)</span>
                 </div>
               </div>
-              <div className="w-full space-y-2">
+              <div className="w-full space-y-2 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">Disponibilité</span>
-                  <span className="font-semibold">{oeeData.availability}%</span>
+                  <span>Disponibilité</span>
+                  <span className="font-semibold">{oeeData.availability ? `${oeeData.availability}%` : '—'}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">Performance</span>
-                  <span className="font-semibold">{oeeData.performance}%</span>
+                  <span>Performance</span>
+                  <span className="font-semibold text-muted-foreground">Non disponible</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">Qualité</span>
-                  <span className="font-semibold">{oeeData.quality}%</span>
+                  <span>Qualité</span>
+                  <span className="font-semibold text-muted-foreground">Non disponible</span>
                 </div>
               </div>
-              <Badge className="bg-green-500">
-                Classe Mondiale (OEE &gt; 85% = 78.4%)
+              <Badge variant={oeeData.oee >= 85 ? 'default' : 'secondary'}>
+                {oeeData.oee >= 85 ? 'Classe Mondiale' : 'À améliorer'}
               </Badge>
+              <p className="text-xs text-center text-muted-foreground">
+                💡 OEE calculé uniquement avec disponibilité. Pour un OEE complet, ajoutez données de performance et qualité.
+              </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* 5S Audit Radar */}
+        {/* Cycle Time Distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-orange-500" />
+              Temps de Cycle par Type
+            </CardTitle>
+            <CardDescription>
+              Durée moyenne des interventions (heures)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {cycleData.length ? (
+              <>
+                <ResponsiveContainer width="100%" height={250}>
+                  <BarChart data={cycleData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="type" />
+                    <YAxis label={{ value: 'Heures', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="avg" fill="#f59e0b" name="Moyenne" />
+                    <Bar dataKey="min" fill="#10b981" name="Min" />
+                    <Bar dataKey="max" fill="#ef4444" name="Max" />
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className="mt-4 rounded-md bg-orange-50 p-3 text-sm text-orange-900 dark:bg-orange-950 dark:text-orange-100">
+                  <strong>Lean Insight: </strong>
+                  Analyser la variance élevée pour standardiser les temps d'intervention.
+                </div>
+              </>
+            ) : (
+              <div className="flex h-72 flex-col items-center justify-center gap-2 rounded-md border border-dashed text-center text-sm text-muted-foreground">
+                <Clock className="h-8 w-8 text-muted-foreground/50" />
+                <span>Aucune donnée de cycle temps</span>
+                <span className="text-xs">Importez des work orders avec dates de début/fin</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Pareto - Placeholder */}
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-purple-500" />
+              Analyse Pareto - Causes de Pannes (80/20)
+            </CardTitle>
+            <CardDescription>
+              80% des pannes proviennent de ~20% des causes
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-md border-2 border-dashed">
+              <BarChart3 className="h-12 w-12 text-muted-foreground/50" />
+              <div className="text-center">
+                <p className="font-semibold">Données AMDEC requises</p>
+                <p className="text-sm text-muted-foreground">
+                  Importez un fichier AMDEC avec modes de défaillance pour voir l'analyse Pareto
+                </p>
+              </div>
+              <Badge variant="outline">Fonctionnalité à venir</Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 5S Audit - Placeholder */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -977,74 +1091,14 @@ function LeanAnalyticsTab() {
               Audit 5S
             </CardTitle>
             <CardDescription>
-              Évaluation terrain des 5 piliers Lean
+              Scores d'audit par zone
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <RadarChart data={fiveSData}>
-                <PolarGrid />
-                <PolarAngleAxis dataKey="aspect" />
-                <PolarRadiusAxis angle={90} domain={[0, 100]} />
-                <Radar
-                  name="Score"
-                  dataKey="score"
-                  stroke="#3b82f6"
-                  fill="#3b82f6"
-                  fillOpacity={0.6}
-                />
-                <Tooltip />
-              </RadarChart>
-            </ResponsiveContainer>
-            <div className="mt-4 space-y-2">
-              {fiveSData.map((item) => (
-                <div key={item.aspect} className="flex items-center justify-between text-sm">
-                  <span>{item.aspect}</span>
-                  <Badge variant={item.score >= 85 ? 'default' : item.score >= 75 ? 'secondary' : 'destructive'}>
-                    {item.score}/100
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Cycle Time Distribution */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="h-5 w-5 text-orange-500" />
-              Distribution Temps de Cycle (VSM Simplified)
-            </CardTitle>
-            <CardDescription>
-              Analyse des temps de réparation par type d'intervention
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart
-                data={[
-                  { type: 'Préventive', avg: 2.1, min: 1.5, max: 3.2 },
-                  { type: 'Corrective', avg: 4.5, min: 2.8, max: 7.2 },
-                  { type: 'Urgence', avg: 1.2, min: 0.5, max: 2.5 },
-                  { type: 'Amélioration', avg: 6.8, min: 5.0, max: 9.5 },
-                ]}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="type" />
-                <YAxis label={{ value: 'Heures', angle: -90, position: 'insideLeft' }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="avg" fill="#f59e0b" name="Temps moyen" />
-                <Bar dataKey="min" fill="#10b981" name="Min" />
-                <Bar dataKey="max" fill="#ef4444" name="Max" />
-              </BarChart>
-            </ResponsiveContainer>
-            <div className="mt-4 rounded-md bg-orange-50 p-3 dark:bg-orange-950">
-              <p className="text-sm text-orange-900 dark:text-orange-100">
-                <strong>Lean Insight:</strong> Les interventions correctives ont 2x plus de variance. 
-                Augmenter la maintenance préventive pour réduire les urgences et stabiliser le flow.
-              </p>
+            <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed text-center text-sm text-muted-foreground">
+              <CheckCircle2 className="h-8 w-8 text-muted-foreground/50" />
+              <span>Pas de données d'audits 5S</span>
+              <span className="text-xs">Ajoutez un schéma audits_5s (zone, score, date)</span>
             </div>
           </CardContent>
         </Card>
@@ -1054,113 +1108,16 @@ function LeanAnalyticsTab() {
 }
 
 // ========== ONGLET KANBAN BOARD ==========
+// TODO: Re-implement with local DB hooks - Supabase version temporarily removed
 function KanbanBoardTab() {
-  const columns = [
-    { id: 'todo', title: 'À faire', items: kanbanData.todo, color: 'border-blue-500' },
-    { id: 'inProgress', title: 'En cours', items: kanbanData.inProgress, color: 'border-orange-500' },
-    { id: 'blocked', title: 'Bloqué', items: kanbanData.blocked, color: 'border-red-500' },
-    { id: 'done', title: 'Terminé', items: kanbanData.done, color: 'border-green-500' },
-  ];
-
   return (
-    <>
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold">Interventions Kanban</h2>
-          <p className="text-sm text-muted-foreground">
-            Gestion visuelle des tâches de maintenance (Drag & Drop à venir)
-          </p>
-        </div>
-        <Button className="gap-2">
-          <Factory className="h-4 w-4" />
-          Nouvelle Intervention
-        </Button>
+    <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed">
+      <div className="text-center">
+        <p className="text-lg font-semibold">Kanban Board - En cours de migration</p>
+        <p className="text-sm text-muted-foreground">Bientôt disponible avec données locales</p>
       </div>
-
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {columns.map((column) => (
-          <Card key={column.id} className={`border-t-4 ${column.color}`}>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span>{column.title}</span>
-                <Badge variant="outline">{column.items.length}</Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {column.items.map((item) => (
-                <Card key={item.id} className="cursor-pointer transition-shadow hover:shadow-md">
-                  <CardContent className="p-4">
-                    <div className="mb-2 flex items-start justify-between">
-                      <h3 className="font-semibold">{item.title}</h3>
-                      <div className={`h-2 w-2 rounded-full ${getPriorityColor(item.priority)}`} />
-                    </div>
-                    <p className="mb-2 text-sm text-muted-foreground">{item.equipment}</p>
-                    <div className="flex items-center justify-between">
-                      <Badge variant="secondary" className="text-xs">
-                        {item.assignee}
-                      </Badge>
-                      <Badge className={`text-xs ${getPriorityColor(item.priority)} text-white`}>
-                        {item.priority}
-                      </Badge>
-                    </div>
-                    {'reason' in item && item.reason && (
-                      <div className="mt-2 rounded-md bg-red-50 p-2 dark:bg-red-950">
-                        <p className="text-xs text-red-900 dark:text-red-100">
-                          🚧 {String(item.reason)}
-                        </p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-              {column.items.length === 0 && (
-                <div className="flex h-32 items-center justify-center rounded-md border border-dashed">
-                  <p className="text-sm text-muted-foreground">Aucune tâche</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Métriques Kanban */}
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Lead Time Moyen</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">3.2 jours</div>
-            <p className="text-xs text-muted-foreground">De création à terminé</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Cycle Time Moyen</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">1.8 jours</div>
-            <p className="text-xs text-muted-foreground">De en cours à terminé</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">WIP Limit</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {kanbanData.inProgress.length}/5
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {kanbanData.inProgress.length >= 5 ? (
-                <span className="text-red-500">⚠️ Limite atteinte</span>
-              ) : (
-                <span className="text-green-500">✓ Sous contrôle</span>
-              )}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    </>
+    </div>
   );
 }
+
+// ========== HELPER FUNCTIONS ==========

@@ -13,16 +13,27 @@
     "./logger": "./src/logger/index.ts",
     "./utils": "./src/utils.ts",
     "./hooks": "./src/hooks/index.ts",
-    "./events": "./src/events/index.tsx"
+    "./events": "./src/events/index.tsx",
+    "./localdb/*": "./src/localdb/*",
+    "./localdb/provider": "./src/localdb/provider.tsx",
+    "./localdb/hooks": "./src/localdb/hooks.ts",
+    "./localdb/schema": "./src/localdb/schema.ts",
+    "./localdb/kpi": "./src/localdb/kpi.ts",
+    "./localdb/import": "./src/localdb/import.ts",
+    "./localdb/export": "./src/localdb/export.ts"
   },
   "devDependencies": {
     "@kit/eslint-config": "workspace:*",
     "@kit/prettier-config": "workspace:*",
     "@kit/tsconfig": "workspace:*",
-    "@types/react": "19.2.2"
+    "@types/react": "19.2.2",
+    "@types/uuid": "^11.0.0"
   },
   "dependencies": {
-    "pino": "^10.0.0"
+    "dexie": "^4.0.8",
+    "dexie-react-hooks": "^1.1.3",
+    "pino": "^10.0.0",
+    "uuid": "^13.0.0"
   },
   "typesVersions": {
     "*": {
