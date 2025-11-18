@@ -10,12 +10,18 @@ interface ExportPDFButtonProps {
       headers: string[];
       rows: any[];
     };
+    title?: string;
+    date?: string;
+    machine?: string;
+    summary?: any;
+    analysisTable?: any[]; // AMDEC AI analysis results
   };
   filename: string;
   title: string;
+  className?: string;
 }
 
-export function ExportPDFButton({ data, filename, title }: ExportPDFButtonProps) {
+export function ExportPDFButton({ data, filename, title, className }: ExportPDFButtonProps) {
   const handleExport = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -107,7 +113,8 @@ export function ExportPDFButton({ data, filename, title }: ExportPDFButtonProps)
           <div class="date">📅 ${currentDate}</div>
         </div>
         
-        <h1>${title}</h1>
+        <h1>${data.title || title}</h1>
+        ${data.machine ? `<p style="color: #6b7280; margin-bottom: 20px;"><strong>Machine:</strong> ${data.machine}</p>` : ''}
         
         ${data.kpis ? `
           <div class="kpi-section">
@@ -118,6 +125,84 @@ export function ExportPDFButton({ data, filename, title }: ExportPDFButtonProps)
               </div>
             `).join('')}
           </div>
+        ` : ''}
+
+        ${data.summary?.topFailures ? `
+          <h2>Top 5 Types de Pannes</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Type de panne</th>
+                <th>Occurrences</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.summary.topFailures.map(([type, count]: [string, number]) => `
+                <tr>
+                  <td>${type}</td>
+                  <td><strong>${count}</strong></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        ` : ''}
+
+        ${data.summary?.topComponents ? `
+          <h2>Top 5 Composants Critiques</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Composant</th>
+                <th>Nombre de pannes</th>
+                <th>Coût total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.summary.topComponents.map(([comp, stats]: [string, any]) => `
+                <tr>
+                  <td>${comp}</td>
+                  <td><strong>${stats.count}</strong></td>
+                  <td>${Math.round(stats.cost).toLocaleString()} €</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        ` : ''}
+
+        ${data.analysisTable && data.analysisTable.length > 0 ? `
+          <h2>Analyse AMDEC (${data.machine})</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Composant</th>
+                <th>Mode de défaillance</th>
+                <th>F</th>
+                <th>G</th>
+                <th>D</th>
+                <th>RPN</th>
+                <th>Action recommandée</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.analysisTable.map((row) => {
+                const rpnClass = row.rpn >= 75 ? 'critical' : '';
+                return `
+                  <tr>
+                    <td>${row.component}</td>
+                    <td>${row.failureType}</td>
+                    <td><strong>${row.frequency}</strong></td>
+                    <td><strong>${row.severity}</strong></td>
+                    <td><strong>${row.detectability}</strong></td>
+                    <td class="${rpnClass}"><strong>${row.rpn}</strong></td>
+                    <td style="font-size: 12px;">${row.action}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+          <p style="color: #6b7280; font-size: 12px; margin-top: 10px;">
+            <strong>Légende:</strong> F = Fréquence (1-5), G = Gravité (1-5), D = Détectabilité (1-5), RPN = F×G×D (max 125)
+          </p>
         ` : ''}
 
         ${data.table ? `
@@ -155,7 +240,7 @@ export function ExportPDFButton({ data, filename, title }: ExportPDFButtonProps)
   };
 
   return (
-    <Button onClick={handleExport} variant="outline" className="gap-2">
+    <Button onClick={handleExport} variant="outline" className={className || "gap-2"}>
       <FileDown className="h-4 w-4" />
       Exporter PDF
     </Button>
