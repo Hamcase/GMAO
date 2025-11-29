@@ -20,7 +20,9 @@
     "./localdb/schema": "./src/localdb/schema.ts",
     "./localdb/kpi": "./src/localdb/kpi.ts",
     "./localdb/import": "./src/localdb/import.ts",
-    "./localdb/export": "./src/localdb/export.ts"
+    "./localdb/export": "./src/localdb/export.ts",
+    "./localdb/excelImport": "./src/localdb/excelImport.ts",
+    "./localdb/pdr-import": "./src/localdb/pdr-import.ts"
   },
   "devDependencies": {
     "@kit/eslint-config": "workspace:*",
@@ -33,7 +35,8 @@
     "dexie": "^4.0.8",
     "dexie-react-hooks": "^1.1.3",
     "pino": "^10.0.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   },
   "typesVersions": {
     "*": {

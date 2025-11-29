@@ -29,7 +29,7 @@ type Solution = {
 
 export async function POST(req: Request) {
   try {
-    const { equipment, priority, description, options } = (await req.json()) as {
+    const { equipment, priority, description, options, regenerationContext } = (await req.json()) as {
       equipment: string;
       priority: string;
       description: string;
@@ -40,6 +40,10 @@ export async function POST(req: Request) {
         includeTools: boolean;
         includeRisk: boolean;
         includeResources: boolean;
+      };
+      regenerationContext?: {
+        previousFeedback: string;
+        attemptNumber: number;
       };
     };
 
@@ -88,6 +92,19 @@ Contexte:
 Problème:
 ${description.trim()}
 
+${regenerationContext ? `
+⚠️ RÉGÉNÉRATION (Tentative #${regenerationContext.attemptNumber})
+La réponse précédente a été refusée. Retour utilisateur:
+"${regenerationContext.previousFeedback}"
+
+AJUSTEMENTS REQUIS:
+- Si "trop général/vague": Fournir des valeurs numériques précises, références exactes de composants
+- Si "manque de détails techniques": Ajouter couples de serrage, tolérances, spécifications électriques
+- Si "pas assez de contexte sécurité": Développer davantage les risques et procédures LOTO
+- Si "pièces non adaptées": Suggérer des alternatives avec références plus spécifiques
+- Adopter une approche différente de la tentative précédente
+` : ''}
+
 Options:
 - Étapes détaillées: ${options?.detailedSteps ? 'oui' : 'non'}
 - Inclure sécurité: ${options?.includeSafety ? 'oui' : 'non'}
@@ -113,7 +130,7 @@ Contraintes:
       },
       body: JSON.stringify({
         model: 'llama-3.1-8b-instant',
-        temperature: 0.3,
+        temperature: regenerationContext ? 0.4 : 0.3, // Slightly higher temp for variety on regenerations
         max_tokens: 2500,
         messages: [
           { role: 'system', content: system },
@@ -136,28 +153,50 @@ Contraintes:
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content ?? '';
 
+    console.log('[GenAI] Raw LLM response length:', content.length);
+    console.log('[GenAI] First 300 chars:', content.slice(0, 300));
+
     let parsed: Solution | null = null;
+    
+    // Try parsing as direct JSON first
     try {
       parsed = JSON.parse(content);
-    } catch {
+      console.log('[GenAI] ✅ Parsed as direct JSON');
+    } catch (firstErr) {
+      console.log('[GenAI] ❌ Direct JSON parse failed, trying markdown extraction...');
+      
+      // Try extracting from markdown code blocks
       const match = content.match(/```json\s*([\s\S]*?)```/i) || content.match(/```\s*([\s\S]*?)```/i);
       if (match?.[1]) {
         try {
           parsed = JSON.parse(match[1]);
-        } catch {
-          parsed = null;
+          console.log('[GenAI] ✅ Parsed from markdown block');
+        } catch (mdErr) {
+          console.log('[GenAI] ❌ Markdown block parse failed');
         }
       }
     }
 
-    if (!parsed || !parsed.title || !Array.isArray(parsed.steps)) {
-      parsed = {
-        title: `Procédure - ${equipment || 'Équipement'}`,
-        summary: 'Résumé non structuré reçu. Veuillez affiner la description.',
-        steps: [content?.slice(0, 600) || 'Aucune donnée.'],
-      };
+    // Validate parsed structure
+    if (!parsed || !parsed.title || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+      console.error('[GenAI] ⚠️ Validation failed:', {
+        hasParsed: !!parsed,
+        hasTitle: parsed?.title,
+        stepsIsArray: Array.isArray(parsed?.steps),
+        stepsLength: parsed?.steps?.length
+      });
+      
+      return NextResponse.json(
+        { 
+          error: 'Invalid response structure from AI',
+          detail: 'L\'IA n\'a pas retourné une structure valide. Veuillez reformuler votre demande.',
+          rawContent: content.slice(0, 500)
+        },
+        { status: 422 },
+      );
     }
 
+    console.log('[GenAI] ✅ Response validated successfully');
     return NextResponse.json({ solution: parsed }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json(

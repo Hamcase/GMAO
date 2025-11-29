@@ -240,7 +240,7 @@ export function ExportPDFButton({ data, filename, title, className }: ExportPDFB
   };
 
   return (
-    <Button onClick={handleExport} variant="outline" className={className || "gap-2"}>
+    <Button onClick={handleExport} variant="secondary" className={className || "gap-2 bg-white/20 text-white hover:bg-white/30 border border-white/30"}>
       <FileDown className="h-4 w-4" />
       Exporter PDF
     </Button>

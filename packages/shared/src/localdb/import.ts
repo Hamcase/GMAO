@@ -76,10 +76,31 @@ export async function importWorkOrdersFromRows(headers: string[], rows: string[]
     const isHours = downtimeColName.toLowerCase().includes('(h)');
     const downtimeMinutes = isHours ? downtimeValue * 60 : downtimeValue;
     
+    // Extract staff workload data (MO interne = internal staff)
+    const moInterneNom = get(['[mo interne].nom', '[mo interne] nom', 'mo interne nom']);
+    const moInternePrenom = get(['[mo interne].prénom', '[mo interne].prenom', '[mo interne] prénom', '[mo interne] prenom', 'mo interne prénom', 'mo interne prenom']);
+    const moInterneHeures = get(['[mo interne].nombre d\'heures', '[mo interne].nombre d heures', '[mo interne] nombre d\'heures', '[mo interne] nombre d heures', 'mo interne nombre d\'heures', 'mo interne nombre d heures']);
+    const nombreHeuresMO = get(['nombre d\'heures mo', 'nombre d heures mo', 'nombre heures mo']);
+    
+    // Parse hours (handle French comma decimals)
+    const parseHours = (v: string | undefined) => {
+      if (!v) return undefined;
+      return Number(String(v).replace(',', '.')) || undefined;
+    };
+    
+    const internalHours = parseHours(moInterneHeures);
+    const totalHours = parseHours(nombreHeuresMO);
+    const externalHours = (totalHours !== undefined && internalHours !== undefined) ? totalHours - internalHours : undefined;
+    
+    // Get asset ID and normalize to uppercase to match Excel (machine1 -> Machine1)
+    const rawAssetId = get(['asset_id', 'asset', 'equipement', 'equipment', 'désignation', 'designation', 'machine']) || 'unknown-asset';
+    const assetId = rawAssetId === 'unknown-asset' ? rawAssetId : 
+      rawAssetId.replace(/^(machine)(\d+)$/i, (_, m, n) => 'Machine' + n) || rawAssetId;
+    
     // Build record
     const record = {
       id: uuid(),
-      assetId: get(['asset_id', 'asset', 'equipement', 'equipment', 'désignation', 'designation', 'machine']) || 'unknown-asset',
+      assetId,
       assignee: get(['assignee', 'technician', 'technicien', 'intervenant', 'responsable']) || undefined,
       title: get(['title', 'titre', 'description', 'résumé intervention', 'resume_intervention', 'résultat', 'resultat']) || undefined,
       type: (get(['type', 'work_type', 'type_intervention', 'type de panne', 'type_de_panne', 'catégorie de panne', 'categorie_de_panne']) || 'corrective').toLowerCase(),
@@ -89,7 +110,14 @@ export async function importWorkOrdersFromRows(headers: string[], rows: string[]
       endAt: toDate(get(['end_at', 'date_fin', 'fin', 'end_date'])),
       createdAt: toDate(get(['created_at', 'date_creation', 'date demande', 'date_demande'])) || toDate(get(['start_at', 'date_debut', 'date intervention'])),
       downtimeMinutes,
-      customColumns: {} as Record<string, any>,
+      customColumns: {
+        // Store staff workload data
+        ...(moInterneNom && { staffLastName: moInterneNom }),
+        ...(moInternePrenom && { staffFirstName: moInternePrenom }),
+        ...(internalHours !== undefined && { internalHours }),
+        ...(totalHours !== undefined && { totalHours }),
+        ...(externalHours !== undefined && { externalHours }),
+      } as Record<string, any>,
     };
 
     // Populate customColumns with any non-empty columns not mapped above
@@ -121,7 +149,11 @@ export async function importWorkOrdersFromRows(headers: string[], rows: string[]
     }));
   if (newAssets.length) await db.assets.bulkAdd(newAssets);
   
-  await recalcKpis();
+  // DO NOT call recalcKpis() here - it calculates availability from work orders which:
+  // 1. Creates incorrect availability values (should come from Excel only)
+  // 2. Adds machines without sector info, creating "Non défini" entries
+  // 3. MTBF/MTTR calculation should be done separately when explicitly requested
+  console.log('✅ CSV import complete. KPI calculation skipped - use Excel for availability data.');
 }
 
 // Import AMDEC (failure modes) from work order CSV with Organe (component) and Cause columns

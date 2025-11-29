@@ -106,6 +106,83 @@ export interface AMDECRawData {
   customColumns?: Record<string, any>;
 }
 
+// AI Interaction for feedback loop and learning
+export interface AIInteraction {
+  id: string;
+  sessionId: string; // Group multiple attempts together
+  queryData: {
+    equipment: string;
+    priority: string;
+    description: string;
+    options: Record<string, boolean>;
+  };
+  responseData: any; // The full Solution object
+  feedbackRating: 1 | -1 | null; // 1 = thumbs up, -1 = thumbs down, null = no feedback yet
+  feedbackComment?: string;
+  regenerationCount: number; // Which attempt this is (0 = first, 1 = first regen, etc.)
+  isAccepted: boolean; // User explicitly accepted this response
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// PDR History Record (Spare Parts Usage)
+export interface PDRHistory {
+  id: string;
+  machine: string; // Désignation
+  interventionDate: Date; // Date intervention
+  failureType: string; // Type de panne
+  downtimeHours?: number; // Durée arrêt (h)
+  result?: string; // Résultat
+  materialCost?: number; // Coût matériel
+  partDesignation?: string; // [Pièce].Désignation
+  partReference?: string; // [Pièce].Référence
+  partQuantity?: number; // [Pièce].Quantité
+  customColumns?: Record<string, any>;
+}
+
+// Forecast Configuration (Trained Model)
+export interface ForecastConfig {
+  id: string;
+  machine: string;
+  partReference: string | 'ALL'; // 'ALL' for all parts forecasting
+  model: 'prophet' | 'arima' | 'sarima' | 'gru' | 'auto';
+  trainedAt: Date;
+  metrics: {
+    mape: number; // Mean Absolute Percentage Error
+    rmse: number; // Root Mean Square Error
+    mae: number;  // Mean Absolute Error
+    r2: number;   // R-squared
+  };
+  parameters?: Record<string, any>;
+  trainingDataRange: {
+    start: string; // YYYY-MM-DD
+    end: string;
+  };
+}
+
+// Forecast Result
+export interface ForecastResult {
+  id: string;
+  configId: string;
+  machine: string;
+  partReference: string;
+  partDesignation: string;
+  forecastPeriod: {
+    start: number; // Year
+    end: number;   // Year
+  };
+  predictions: {
+    year: number;
+    month?: number;
+    predicted: number;
+    lower: number; // confidence interval lower bound
+    upper: number; // confidence interval upper bound
+  }[];
+  historicalTotal: number; // Total used in training data
+  confidence: number; // Overall confidence score
+  generatedAt: Date;
+}
+
 export class LocalGMAODb extends Dexie {
   assets!: Table<Asset, string>;
   functions!: Table<FunctionModel, string>;
@@ -115,6 +192,10 @@ export class LocalGMAODb extends Dexie {
   parts!: Table<Part, string>;
   partDemand!: Table<PartDemand, string>;
   amdecRawData!: Table<AMDECRawData, string>;
+  aiInteractions!: Table<AIInteraction, string>;
+  pdrHistory!: Table<PDRHistory, string>;
+  forecastConfigs!: Table<ForecastConfig, string>;
+  forecastResults!: Table<ForecastResult, string>;
 
   constructor() {
     super('gmao_local');
@@ -139,6 +220,35 @@ export class LocalGMAODb extends Dexie {
       parts: 'id, name, category, status',
       partDemand: 'id, partId, period',
       amdecRawData: 'id, machine, component, failureType'
+    });
+    
+    // Version 3: Add AI interactions table for feedback loop
+    this.version(3).stores({
+      assets: 'id, name, criticality',
+      functions: 'id, assetId, name',
+      failureModes: 'id, functionId, severity, occurrence, detection, status',
+      workOrders: 'id, assetId, assignee, status, startAt, endAt',
+      kpis: 'id, assetCode, metricType, period',
+      parts: 'id, name, category, status',
+      partDemand: 'id, partId, period',
+      amdecRawData: 'id, machine, component, failureType',
+      aiInteractions: 'id, sessionId, feedbackRating, isAccepted, createdAt'
+    });
+    
+    // Version 4: Add PDR forecasting tables
+    this.version(4).stores({
+      assets: 'id, name, criticality',
+      functions: 'id, assetId, name',
+      failureModes: 'id, functionId, severity, occurrence, detection, status',
+      workOrders: 'id, assetId, assignee, status, startAt, endAt',
+      kpis: 'id, assetCode, metricType, period',
+      parts: 'id, name, category, status',
+      partDemand: 'id, partId, period',
+      amdecRawData: 'id, machine, component, failureType',
+      aiInteractions: 'id, sessionId, feedbackRating, isAccepted, createdAt',
+      pdrHistory: 'id, machine, partReference, interventionDate',
+      forecastConfigs: 'id, machine, partReference, model, trainedAt',
+      forecastResults: 'id, configId, machine, partReference, generatedAt'
     });
   }
 }

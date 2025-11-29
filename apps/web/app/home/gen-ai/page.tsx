@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppBreadcrumbs } from '@kit/ui/app-breadcrumbs';
 import { Button } from '@kit/ui/button';
 import { Input } from '@kit/ui/input';
@@ -15,6 +15,11 @@ import {
 } from '@kit/ui/select';
 import { Checkbox } from '@kit/ui/checkbox';
 import { AlertCircle, Download, FileText, Wrench, AlertTriangle, BookOpen } from 'lucide-react';
+import { AIFeedback } from '~/components/ai-feedback';
+import { AIResponseHistory } from '~/components/ai-response-history';
+import { db } from '@kit/shared/localdb/schema';
+import type { AIInteraction } from '@kit/shared/localdb/schema';
+import { v4 as uuid } from 'uuid';
 
 type Solution = {
   title: string;
@@ -46,6 +51,14 @@ export default function GenAIPage() {
   const [solution, setSolution] = useState<Solution | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Feedback loop state
+  const [sessionId, setSessionId] = useState<string>('');
+  const [currentInteractionId, setCurrentInteractionId] = useState<string>('');
+  const [regenerationCount, setRegenerationCount] = useState(0);
+  const [currentRating, setCurrentRating] = useState<1 | -1 | null>(null);
+  const [isAccepted, setIsAccepted] = useState(false);
+  const [responseHistory, setResponseHistory] = useState<AIInteraction[]>([]);
 
   const [options, setOptions] = useState({
     detailedSteps: true,
@@ -55,8 +68,27 @@ export default function GenAIPage() {
     includeRisk: true,
     includeResources: true,
   });
+  
+  // Load history when sessionId changes
+  useEffect(() => {
+    if (sessionId) {
+      loadSessionHistory();
+    }
+  }, [sessionId]);
+  
+  const loadSessionHistory = async () => {
+    try {
+      const history = await db.aiInteractions
+        .where('sessionId')
+        .equals(sessionId)
+        .sortBy('createdAt');
+      setResponseHistory(history);
+    } catch (error) {
+      console.error('Failed to load history:', error);
+    }
+  };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (regenerationComment?: string) => {
     if (!description.trim()) {
       setError('Veuillez décrire le problème.');
       return;
@@ -66,25 +98,136 @@ export default function GenAIPage() {
     setError(null);
     setSolution(null);
 
+    // Create new session on first generation
+    const newSessionId = sessionId || uuid();
+    if (!sessionId) {
+      setSessionId(newSessionId);
+      setRegenerationCount(0);
+    }
+
     try {
       const res = await fetch('/api/genai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ equipment, priority, description, options }),
+        body: JSON.stringify({ 
+          equipment, 
+          priority, 
+          description, 
+          options,
+          // Include context for regeneration
+          regenerationContext: regenerationComment ? {
+            previousFeedback: regenerationComment,
+            attemptNumber: regenerationCount + 1
+          } : undefined
+        }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Erreur serveur');
+        throw new Error(data.error || data.detail || 'Erreur serveur');
+      }
+      
+      // Validate solution structure
+      if (!data.solution || !data.solution.title || !Array.isArray(data.solution.steps)) {
+        console.error('Invalid solution structure:', data);
+        throw new Error('La réponse de l\'IA n\'est pas correctement structurée. Veuillez réessayer.');
       }
 
       setSolution(data.solution);
+      
+      // Save interaction to IndexedDB
+      const interactionId = uuid();
+      const interaction: AIInteraction = {
+        id: interactionId,
+        sessionId: newSessionId,
+        queryData: {
+          equipment,
+          priority,
+          description,
+          options,
+        },
+        responseData: data.solution,
+        feedbackRating: null,
+        feedbackComment: regenerationComment,
+        regenerationCount: regenerationCount,
+        isAccepted: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      
+      await db.aiInteractions.add(interaction);
+      setCurrentInteractionId(interactionId);
+      setCurrentRating(null);
+      setIsAccepted(false);
+      
+      // Reload history
+      await loadSessionHistory();
+      
     } catch (err: any) {
       setError(err.message || 'Erreur inconnue');
     } finally {
       setLoading(false);
     }
+  };
+  
+  const handleFeedback = async (rating: 1 | -1, comment?: string) => {
+    if (!currentInteractionId) return;
+    
+    try {
+      const accepted = rating === 1;
+      
+      await db.aiInteractions.update(currentInteractionId, {
+        feedbackRating: rating,
+        feedbackComment: comment,
+        isAccepted: accepted,
+        updatedAt: new Date(),
+      });
+      
+      setCurrentRating(rating);
+      setIsAccepted(accepted);
+      
+      // Reload history
+      await loadSessionHistory();
+      
+    } catch (error) {
+      console.error('Failed to save feedback:', error);
+      throw error;
+    }
+  };
+  
+  const handleRegenerate = async (comment?: string) => {
+    setRegenerationCount(prev => prev + 1);
+    await handleGenerate(comment);
+  };
+  
+  const handleSelectHistoricalResponse = async (id: string) => {
+    try {
+      const interaction = await db.aiInteractions.get(id);
+      if (interaction) {
+        setSolution(interaction.responseData);
+        setCurrentInteractionId(interaction.id);
+        setCurrentRating(interaction.feedbackRating);
+        setIsAccepted(interaction.isAccepted);
+        setRegenerationCount(interaction.regenerationCount);
+      }
+    } catch (error) {
+      console.error('Failed to load historical response:', error);
+    }
+  };
+  
+  const handleNewQuery = () => {
+    // Reset everything for a new query
+    setSessionId('');
+    setCurrentInteractionId('');
+    setRegenerationCount(0);
+    setCurrentRating(null);
+    setIsAccepted(false);
+    setResponseHistory([]);
+    setSolution(null);
+    setError(null);
+    setEquipment('');
+    setDescription('');
   };
 
   const exportToPDF = () => {
@@ -411,9 +554,15 @@ export default function GenAIPage() {
             </div>
           </div>
 
-          <Button onClick={handleGenerate} disabled={loading} className="w-full">
+          <Button onClick={() => handleGenerate()} disabled={loading} className="w-full">
             {loading ? 'Génération...' : 'Générer la procédure'}
           </Button>
+          
+          {sessionId && responseHistory.length > 0 && (
+            <Button onClick={handleNewQuery} variant="outline" className="w-full">
+              Nouvelle demande
+            </Button>
+          )}
 
           {error && (
             <div className="flex items-start gap-2 rounded-md border border-red-500 bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950">
@@ -425,6 +574,15 @@ export default function GenAIPage() {
 
         {/* Résultat */}
         <div className="space-y-4">
+          {/* Response History */}
+          {responseHistory.length > 0 && (
+            <AIResponseHistory
+              history={responseHistory}
+              currentResponseId={currentInteractionId}
+              onSelectResponse={handleSelectHistoricalResponse}
+            />
+          )}
+          
           {solution && (
             <div className="space-y-4 rounded-lg border bg-card p-6">
               <div className="flex items-start justify-between">
@@ -442,6 +600,17 @@ export default function GenAIPage() {
               </div>
 
               <p className="text-sm text-muted-foreground">{solution.summary}</p>
+              
+              {/* AI Feedback Component */}
+              <AIFeedback
+                onFeedback={handleFeedback}
+                onRegenerate={handleRegenerate}
+                regenerationCount={regenerationCount}
+                maxRegenerations={5}
+                isAccepted={isAccepted}
+                currentRating={currentRating}
+                disabled={loading}
+              />
 
               <div className="space-y-3">
                 <h3 className="font-semibold">Étapes</h3>
