@@ -4,7 +4,6 @@ import { Button } from '@kit/ui/button';
 import Link from 'next/link';
 import { 
   Wrench,
-  FileText,
   MessageSquare,
   Cpu,
   Package,
@@ -12,6 +11,7 @@ import {
   LayoutDashboard,
   ArrowRight,
   Sparkles,
+  Brain,
 } from 'lucide-react';
 
 export default function HomePage() {
@@ -23,14 +23,6 @@ export default function HomePage() {
       href: '/home/dashboard',
       color: 'text-blue-500',
       bgColor: 'bg-blue-50 dark:bg-blue-950',
-    },
-    {
-      title: 'OCR Intelligent',
-      description: 'Extraction automatique de texte depuis vos documents PDF et images',
-      icon: FileText,
-      href: '/home/test-ocr',
-      color: 'text-green-500',
-      bgColor: 'bg-green-50 dark:bg-green-950',
     },
     {
       title: 'Chatbot IA',
@@ -63,6 +55,14 @@ export default function HomePage() {
       href: '/home/amdec',
       color: 'text-red-500',
       bgColor: 'bg-red-50 dark:bg-red-950',
+    },
+    {
+      title: 'Insights & Analytics',
+      description: 'Analyse des techniciens, santé des machines et prédictions de maintenance',
+      icon: Brain,
+      href: '/home/insights',
+      color: 'text-indigo-500',
+      bgColor: 'bg-indigo-50 dark:bg-indigo-950',
     },
   ];
 

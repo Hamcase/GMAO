@@ -145,7 +145,7 @@ export interface ForecastConfig {
   id: string;
   machine: string;
   partReference: string | 'ALL'; // 'ALL' for all parts forecasting
-  model: 'prophet' | 'arima' | 'sarima' | 'gru' | 'auto';
+  model: 'prophet' | 'arima' | 'sarima' | 'lstm' | 'auto';
   trainedAt: Date;
   metrics: {
     mape: number; // Mean Absolute Percentage Error

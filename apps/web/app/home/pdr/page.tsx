@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { createBrowserClient } from '@supabase/ssr';
 import { 
   ArrowUpTrayIcon, 
   DocumentArrowUpIcon,
@@ -48,6 +49,11 @@ interface ImportResult {
 }
 
 export default function PDRPage() {
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+  
   const [activeTab, setActiveTab] = useState<'import' | 'historique' | 'prevision' | 'config'>('import');
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [stats, setStats] = useState<ImportStats | null>(null);
@@ -67,7 +73,7 @@ export default function PDRPage() {
   const [forecastPart, setForecastPart] = useState<string>('');
   const [availableParts, setAvailableParts] = useState<any[]>([]);
   const [forecastHorizon, setForecastHorizon] = useState<number>(3);
-  const [forecastModel, setForecastModel] = useState<'prophet' | 'arima' | 'sarima' | 'gru'>('prophet');
+  const [forecastModel, setForecastModel] = useState<'prophet' | 'arima' | 'sarima' | 'lstm'>('prophet');
   const [isTraining, setIsTraining] = useState(false);
   const [forecastResult, setForecastResult] = useState<any>(null);
   const [trainingError, setTrainingError] = useState<string | null>(null);
@@ -100,6 +106,10 @@ export default function PDRPage() {
   
   const [lookbackWindow, setLookbackWindow] = useState<number>(12);
   const [predictionHorizon, setPredictionHorizon] = useState<number>(12);
+
+  // MTBF & Safety Factor
+  const [useMtbf, setUseMtbf] = useState<boolean>(true);
+  const [safetyFactor, setSafetyFactor] = useState<number>(1.2); // 1.2 = 20% buffer for 24/7 assumption
 
   // Load machines on mount
   useEffect(() => {
@@ -454,7 +464,9 @@ export default function PDRPage() {
     setForecastResult(null);
 
     try {
-      // Get ALL historical data for the machine (not just the part)
+      // --- ÉTAPE 1: Récupérer les données historiques depuis IndexedDB ---
+      console.log(`📊 Récupération des données historiques pour ${forecastMachine} / ${forecastPart}...`);
+      
       const allRecords = await db.pdrHistory
         .where('machine')
         .equals(forecastMachine)
@@ -466,181 +478,194 @@ export default function PDRPage() {
         return;
       }
 
-      // Get date range from ALL interventions (not just this part)
-      const allDates = allRecords.map(r => r.interventionDate.getTime()).sort();
-      const startDate = new Date(allDates[0]!);
-      const endDate = new Date(allDates[allDates.length - 1]!);
+      // Filtrer les enregistrements de cette pièce spécifique
+      const partRecords = allRecords.filter(r => r.partReference === forecastPart);
       
-      // Create complete month range from start to end (fill gaps with 0)
-      const monthMap: Record<string, number> = {};
-      const currentDate = new Date(startDate);
-      currentDate.setUTCDate(1); // First day of month
-      
-      while (currentDate <= endDate) {
-        const monthKey = `${currentDate.getUTCFullYear()}-${String(currentDate.getUTCMonth() + 1).padStart(2, '0')}`;
-        monthMap[monthKey] = 0; // Initialize all months with 0
-        currentDate.setUTCMonth(currentDate.getUTCMonth() + 1);
+      if (partRecords.length === 0) {
+        setTrainingError('Aucune donnée historique pour cette pièce');
+        setIsTraining(false);
+        return;
       }
 
-      // Now fill in actual part usage
-      const partRecords = allRecords.filter(r => r.partReference === forecastPart);
+      // Agréger par mois
+      const monthMap: Record<string, number> = {};
+      
       partRecords.forEach(record => {
         const date = record.interventionDate;
-        const monthKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-        const quantity = record.partQuantity || 0; // Explicit 0 if no quantity
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        const quantity = record.partQuantity || 0;
         monthMap[monthKey] = (monthMap[monthKey] || 0) + quantity;
       });
 
-      // Convert to time series (ALL months, including 0s)
+      // 🔥 NORMALISATION: Remplir TOUS les mois jusqu'à la dernière date du CSV
+      // (PAS jusqu'à aujourd'hui pour ne pas inventer des 0 qui n'existent pas!)
       const sortedMonths = Object.keys(monthMap).sort();
-      const historical = sortedMonths.map(month => ({
-        month,
-        actual: monthMap[month],
-        forecast: null as number | null,
-        lower: null as number | null,
-        upper: null as number | null,
+      
+      if (sortedMonths.length === 0) {
+        setTrainingError('Aucune donnée de consommation trouvée');
+        setIsTraining(false);
+        return;
+      }
+
+      // Trouver la dernière date RÉELLE dans TOUS les enregistrements (pas juste cette pièce)
+      const allDates = allRecords.map(r => r.interventionDate).sort((a, b) => b.getTime() - a.getTime());
+      const lastRealDate = allDates[0]; // Date la plus récente dans le CSV
+      
+      if (!lastRealDate) {
+        setTrainingError('Aucune date d\'intervention trouvée dans les données');
+        setIsTraining(false);
+        return;
+      }
+      
+      // Démarrer depuis le premier mois d'historique de cette pièce
+      const startDate = new Date(sortedMonths[0] + '-01');
+      // Terminer à la dernière date RÉELLE du CSV (pas aujourd'hui!)
+      const endDate = new Date(lastRealDate.getFullYear(), lastRealDate.getMonth(), 1);
+
+      console.log(`📅 Normalisation: ${startDate.toISOString().slice(0,7)} → ${endDate.toISOString().slice(0,7)} (dernière date CSV)`);
+
+      // Générer TOUS les mois entre start et dernière date CSV avec 0 si pas de consommation
+      const historicalData: Array<{ month: string; quantity: number }> = [];
+      const currentMonth = new Date(startDate);
+
+      while (currentMonth <= endDate) {
+        const monthKey = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`;
+        historicalData.push({
+          month: monthKey,
+          quantity: monthMap[monthKey] || 0, // 0 si pas de consommation ce mois
+        });
+        currentMonth.setMonth(currentMonth.getMonth() + 1);
+      }
+
+      console.log(`📈 ${historicalData.length} mois normalisés (dont ${sortedMonths.length} avec consommation réelle)`);
+      console.log(`🔮 Les prévisions commenceront à partir de: ${new Date(endDate.getFullYear(), endDate.getMonth() + 1, 1).toISOString().slice(0,7)}`);
+
+      if (historicalData.length < 3) {
+        setTrainingError('Pas assez de données historiques (minimum 3 mois requis)');
+        setIsTraining(false);
+        return;
+      }
+
+      // --- ÉTAPE 2: Récupérer le token d'authentification Supabase ---
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session?.access_token) {
+        setTrainingError('Session expirée. Veuillez vous reconnecter.');
+        setIsTraining(false);
+        return;
+      }
+
+      // --- ÉTAPE 3: Préparer les paramètres du modèle selon le type sélectionné ---
+      let modelParams: any = {};
+      
+      if (forecastModel === 'prophet') {
+        modelParams = {
+          changepoint_prior_scale: prophetChangepointPrior,
+          seasonality_mode: prophetSeasonalityMode,
+          growth: prophetGrowth,
+        };
+      } else if (forecastModel === 'arima') {
+        modelParams = {
+          order: [arimaP, arimaD, arimaQ],
+        };
+      } else if (forecastModel === 'lstm') {
+        modelParams = {
+          lookback: lookbackWindow,
+          units: lstmUnits,
+          layers: lstmLayers,
+          dropout: lstmDropout,
+          epochs: lstmEpochs,
+        };
+      }
+
+      // --- ÉTAPE 4: Appeler l'API backend Python avec les données ---
+      console.log(`🤖 Entraînement du modèle ${forecastModel} via API backend...`);
+      
+      const response = await fetch('http://localhost:8000/api/v1/pdr/forecast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          historical_data: historicalData, // Envoyer les données directement
+          machine: forecastMachine,
+          part_reference: forecastPart,
+          model_type: forecastModel,
+          horizon: forecastHorizon,
+          params: modelParams,
+          use_mtbf: useMtbf,
+          safety_factor: safetyFactor,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Erreur inconnue' }));
+        throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Prévision reçue:', result);
+
+      // 4. Convertir le format de réponse du backend au format attendu par le frontend
+      // Historique: afficher uniquement les valeurs réelles (actual)
+      const historical = result.historical.map((h: any) => ({
+        month: h.month,
+        actual: h.actual,
+        forecast: null, // Pas de prévision dans l'historique
+        lower: null,
+        upper: null,
       }));
 
-      if (historical.length < 6) {
-        setTrainingError('Pas assez de données historiques (minimum 6 mois requis)');
-        setIsTraining(false);
-        return;
-      }
+      // Prévisions: afficher uniquement les valeurs prédites (forecast)
+      const forecasts = result.forecasts.map((f: any) => ({
+        month: f.month,
+        actual: null, // Pas de valeur réelle dans les prévisions futures
+        forecast: f.forecast,
+        lower: f.lower,
+        upper: f.upper,
+      }));
 
-      // Calculate statistics on ALL data (including 0s)
-      // Use 80/20 train/test split for realistic metrics
-      const trainSize = Math.floor(historical.length * 0.8);
-      const trainData = historical.slice(0, trainSize);
-      const testData = historical.slice(trainSize);
-      
-      // Train on 80% of data
-      const lastN = Math.min(12, trainData.length);
-      const recentValues = trainData.slice(-lastN).map(h => h.actual).filter((v): v is number => v !== undefined);
-      const avgRecent = recentValues.reduce((a, b) => a + b, 0) / (recentValues.length || 1);
-      
-      // All-time average (from training data)
-      const allValues = trainData.map(h => h.actual).filter((v): v is number => v !== undefined);
-      const avgAllTime = allValues.reduce((a, b) => a + b, 0) / (allValues.length || 1);
-      
-      // Growth rate (comparing recent vs all-time)
-      const growthRate = avgAllTime > 0 ? (avgRecent - avgAllTime) / avgAllTime : 0;
+      // Combiner: historique d'abord, puis prévisions
+      const combined = [...historical, ...forecasts];
 
-      // Generate forecast BEYOND the last date
-      const lastDate = new Date(sortedMonths[sortedMonths.length - 1] + '-01');
-      const forecasts = [];
-      
-      for (let i = 1; i <= forecastHorizon; i++) {
-        const forecastDate = new Date(lastDate);
-        forecastDate.setUTCMonth(forecastDate.getUTCMonth() + i);
-        const monthKey = `${forecastDate.getUTCFullYear()}-${String(forecastDate.getUTCMonth() + 1).padStart(2, '0')}`;
-        
-        // Apply trend with dampening
-        const trendDampening = Math.max(0.5, 1 - (i * 0.05));
-        const baseValue = avgRecent * (1 + growthRate * i * 0.2 * trendDampening);
-        const forecastValue = Math.max(0, Math.round(baseValue));
-        
-        // Confidence interval
-        const confidence = Math.max(0.4, 0.8 - (i * 0.05));
-        
-        forecasts.push({
-          month: monthKey,
-          actual: null,
-          forecast: forecastValue,
-          lower: Math.max(0, Math.round(forecastValue * (1 - confidence * 0.4))),
-          upper: Math.round(forecastValue * (1 + confidence * 0.4)),
-        });
-      }
-
-      // Calculate metrics (MAE, MAPE, RMSE, R² on TEST DATA ONLY)
-      // This measures how well the model predicts UNSEEN data
-      const testValues = testData.map(h => h.actual).filter((v): v is number => v !== undefined);
-      
-      if (testValues.length === 0) {
-        setTrainingError('Pas assez de données pour validation (besoin de plus de 6 mois)');
-        setIsTraining(false);
-        return;
-      }
-      
-      // MAE: Mean Absolute Error on test set
-      const predictions = testValues.map(() => avgRecent); // Model predicts avgRecent for all
-      const mae = testValues.reduce((sum, val, i) => sum + Math.abs(val - predictions[i]!), 0) / testValues.length;
-      
-      // MAPE: Mean Absolute Percentage Error (only on non-zero values)
-      const nonZeroIndices = testValues.map((v, i) => v > 0 ? i : -1).filter(i => i >= 0);
-      const mape = nonZeroIndices.length > 0
-        ? nonZeroIndices.reduce((sum, i) => sum + Math.abs((testValues[i]! - predictions[i]!) / testValues[i]!), 0) / nonZeroIndices.length * 100
-        : 0;
-      
-      // RMSE: Root Mean Squared Error on test set
-      const squaredErrors = testValues.reduce((sum, val, i) => sum + Math.pow(val - predictions[i]!, 2), 0);
-      const rmse = Math.sqrt(squaredErrors / testValues.length);
-      
-      // R²: Coefficient of Determination on test set
-      const testMean = testValues.reduce((a, b) => a + b, 0) / testValues.length;
-      const totalVariance = testValues.reduce((sum, val) => sum + Math.pow(val - testMean, 2), 0);
-      const residualVariance = testValues.reduce((sum, val, i) => sum + Math.pow(val - predictions[i]!, 2), 0);
-      const r2 = totalVariance > 0 ? Math.max(0, Math.min(1, 1 - (residualVariance / totalVariance))) : 0;
-
-      // Determine forecast strategy based on data characteristics (using configurable thresholds)
-      let strategy: 'time-series' | 'statistical' | 'safety-stock';
-      let strategyReason = '';
-      
-      const usageRate = allValues.reduce((a, b) => a + b, 0) / allValues.length;
-      const nonZeroCount = allValues.filter(v => v > 0).length;
-      const nonZeroPercentage = (nonZeroCount / allValues.length) * 100;
-      
-      if (r2 >= r2Threshold && nonZeroPercentage >= 20) {
-        strategy = 'time-series';
-        strategyReason = 'Utilisation régulière avec tendance détectable. Prévision basée sur les séries temporelles.';
-      } else if (nonZeroPercentage >= activeMonthsThreshold && usageRate >= 0.5) {
-        strategy = 'statistical';
-        strategyReason = 'Utilisation modérée mais irrégulière. Prévision basée sur la moyenne mobile et probabilités.';
-      } else {
-        strategy = 'safety-stock';
-        strategyReason = 'Utilisation sporadique/imprévisible. Recommandation: stock de sécurité basé sur le taux de défaillance.';
-      }
-
-      // Enhanced forecasts based on strategy
-      const enhancedForecasts = forecasts.map(f => {
-        if (strategy === 'safety-stock') {
-          // For unpredictable parts: use max observed + safety factor (configurable confidence)
-          const stdDev = Math.sqrt(allValues.reduce((sum, v) => sum + Math.pow(v - usageRate, 2), 0) / allValues.length);
-          const safetyStock = Math.ceil(usageRate + (safetyStockConfidence * stdDev));
-          return {
-            ...f,
-            forecast: Math.max(safetyStock, 1), // At least 1 in stock
-            lower: Math.max(Math.floor(usageRate), 1),
-            upper: Math.max(Math.ceil(usageRate + 2 * stdDev), 2),
-          };
-        }
-        return f;
-      });
-
+      // 5. Mettre à jour l'état avec les vraies prévisions ML
       setForecastResult({
         historical,
-        forecasts: enhancedForecasts,
-        combined: [...historical, ...enhancedForecasts],
+        forecasts,
+        combined,
         metrics: {
-          mae: mae.toFixed(2),
-          mape: mape.toFixed(1),
-          rmse: rmse.toFixed(2),
-          r2: r2.toFixed(3),
+          mae: result.metrics.mae.toFixed(2),
+          mape: result.metrics.mape.toFixed(1),
+          rmse: result.metrics.rmse.toFixed(2),
+          r2: result.metrics.r2.toFixed(3),
         },
-        strategy,
-        strategyReason,
+        strategy: result.strategy,
+        strategyReason: result.strategy_reason,
         usageStats: {
-          avgUsage: usageRate.toFixed(2),
-          nonZeroMonths: nonZeroCount,
-          nonZeroPercentage: nonZeroPercentage.toFixed(1),
-          totalMonths: allValues.length,
+          avgUsage: result.usage_stats.mean_usage.toFixed(2),
+          nonZeroMonths: result.usage_stats.non_zero_count,
+          nonZeroPercentage: result.usage_stats.non_zero_percentage.toFixed(1),
+          totalMonths: result.usage_stats.n_months,
         },
-        model: forecastModel,
-        trainedAt: new Date(),
+        model: result.model.toUpperCase(),
+        trainedAt: new Date(result.trained_at),
+        mtbfStats: result.mtbf_stats || null,
+        mtbfWeight: result.mtbf_weight || null,
+        safetyFactor: result.safety_factor || 1.0,
+        forecastingMethod: result.forecasting_method || result.model,
+        warning: result.warning || null,
       });
 
+      console.log('✅ Modèle ML réel entraîné avec succès!');
+
     } catch (error) {
-      console.error('Forecast error:', error);
-      setTrainingError('Erreur lors de la génération des prévisions');
+      console.error('Erreur lors de la prévision ML:', error);
+      setTrainingError(
+        error instanceof Error 
+          ? error.message 
+          : 'Erreur lors de la génération des prévisions. Vérifiez que le backend Python est démarré.'
+      );
     } finally {
       setIsTraining(false);
     }
@@ -1257,25 +1282,83 @@ export default function PDRPage() {
                 </div>
 
                 {/* Model Selection */}
-                <div>
+                <div className="col-span-1 md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Modèle de prévision
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['prophet', 'arima', 'sarima', 'gru'] as const).map(model => (
+                  <div className="grid grid-cols-2 gap-3">
+                    {(['prophet', 'arima', 'sarima', 'lstm'] as const).map(model => (
                       <button
                         key={model}
                         onClick={() => setForecastModel(model)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                        className={`px-4 py-3 rounded-lg font-medium transition-all ${
                           forecastModel === model
                             ? 'bg-orange-500 text-white shadow-md'
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        title={
+                          model === 'prophet' ? 'Tendances & saisonnalité (Facebook Prophet)' :
+                          model === 'arima' ? 'ARIMA - Séries stationnaires' :
+                          model === 'sarima' ? 'SARIMA - ARIMA avec saisonnalité' :
+                          'LSTM - Deep learning pour patterns complexes'
+                        }
                       >
-                        {model.toUpperCase()}
+                        {model === 'prophet' ? 'Prophet' : model.toUpperCase()}
                       </button>
                     ))}
                   </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {forecastModel === 'prophet' && '✨ Recommandé: Capture tendances et saisonnalités automatiquement'}
+                    {forecastModel === 'arima' && '📊 Statistique: Bon pour séries stationnaires sans saisonnalité forte'}
+                    {forecastModel === 'sarima' && '📈 Saisonnier: ARIMA avec composante saisonnière (12 mois)'}
+                    {forecastModel === 'lstm' && '🧠 Deep Learning: Pour patterns non-linéaires complexes'}
+                  </p>
+                </div>
+
+                {/* MTBF Enhancement Toggle */}
+                <div className="col-span-1 md:col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      id="use-mtbf"
+                      checked={useMtbf}
+                      onChange={(e) => setUseMtbf(e.target.checked)}
+                      className="mt-1 w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                    />
+                    <div className="flex-1">
+                      <label htmlFor="use-mtbf" className="font-semibold text-blue-900 cursor-pointer">
+                        🔧 Activer l'amélioration MTBF (recommandé)
+                      </label>
+                      <p className="text-xs text-blue-700 mt-1">
+                        Combine les prévisions temporelles avec le MTBF calculé (temps moyen entre pannes) pour des prévisions plus fiables basées sur la fiabilité machine.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Safety Factor Control */}
+                <div className="col-span-1 md:col-span-2 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <label className="block text-sm font-semibold text-amber-900 mb-2">
+                    🛡️ Facteur de sécurité: {safetyFactor.toFixed(1)}x
+                  </label>
+                  <input
+                    type="range"
+                    min="1.0"
+                    max="2.0"
+                    step="0.1"
+                    value={safetyFactor}
+                    onChange={(e) => setSafetyFactor(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-amber-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-amber-700 mt-1">
+                    <span>1.0 (aucun)</span>
+                    <span>1.2 (24/7 recommandé)</span>
+                    <span>2.0 (très conservateur)</span>
+                  </div>
+                  <p className="text-xs text-amber-700 mt-2">
+                    Multiplie les prévisions pour compenser l'incertitude sur l'intensité d'utilisation. 
+                    <strong> 1.2x = hypothèse 24/7 haute intensité</strong> (recommandé pour éviter les ruptures).
+                  </p>
                 </div>
               </div>
 
@@ -1371,6 +1454,78 @@ export default function PDRPage() {
                     </div>
                   </div>
 
+                  {/* MTBF Stats Display */}
+                  {forecastResult.mtbfStats && (
+                    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <h4 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+                        🔧 Fiabilité Machine (MTBF)
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <div className="text-blue-600 font-medium">MTBF</div>
+                          <div className="text-lg font-bold text-blue-900">
+                            {forecastResult.mtbfStats.mtbf_months.toFixed(1)} mois
+                          </div>
+                          <div className="text-xs text-blue-600">({forecastResult.mtbfStats.mtbf_days} jours)</div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600 font-medium">Pannes historiques</div>
+                          <div className="text-lg font-bold text-blue-900">{forecastResult.mtbfStats.n_failures}</div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600 font-medium">Taux de panne</div>
+                          <div className="text-lg font-bold text-blue-900">{forecastResult.mtbfStats.failure_rate.toFixed(3)}/mois</div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600 font-medium">Fiabilité</div>
+                          <div className={`text-lg font-bold ${
+                            forecastResult.mtbfStats.reliability === 'high' 
+                              ? 'text-green-900' 
+                              : forecastResult.mtbfStats.reliability === 'medium'
+                              ? 'text-yellow-900'
+                              : 'text-red-900'
+                          }`}>
+                            {forecastResult.mtbfStats.reliability === 'high' ? '✅ Élevée' : 
+                             forecastResult.mtbfStats.reliability === 'medium' ? '⚠️ Moyenne' : '❌ Faible'}
+                          </div>
+                        </div>
+                      </div>
+                      {forecastResult.mtbfWeight && (
+                        <div className="mt-3 text-xs text-blue-700 bg-blue-100 rounded p-2">
+                          💡 Prévision hybride: {(forecastResult.mtbfWeight * 100).toFixed(0)}% basée sur MTBF, {((1-forecastResult.mtbfWeight) * 100).toFixed(0)}% sur tendance temporelle
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Warning Banner */}
+                  {forecastResult.warning && (
+                    <div className="mb-6 p-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg">
+                      <div className="flex items-start">
+                        <ExclamationCircleIcon className="w-6 h-6 text-yellow-600 mr-3 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="font-semibold text-yellow-900 mb-1">⚠️ Avertissement</h4>
+                          <p className="text-sm text-yellow-800">{forecastResult.warning}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Safety Factor Info */}
+                  {forecastResult.safetyFactor && forecastResult.safetyFactor > 1.0 && (
+                    <div className="mb-6 p-3 bg-amber-50 border border-amber-300 rounded-lg">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-amber-700">🛡️</span>
+                        <span className="text-amber-900 font-medium">
+                          Facteur de sécurité appliqué: {forecastResult.safetyFactor}x
+                        </span>
+                        <span className="text-amber-700">
+                          (hypothèse: utilisation intensive 24/7 pour éviter les ruptures)
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Metrics Cards */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                     <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
@@ -1395,62 +1550,147 @@ export default function PDRPage() {
                     </div>
                   </div>
 
-                  {/* Forecast Chart */}
-                  <div className="bg-gray-50 rounded-lg p-6 mb-8">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                      Historique et Prévisions - {forecastModel.toUpperCase()}
-                    </h3>
-                    <ResponsiveContainer width="100%" height={400}>
-                      <LineChart data={forecastResult.combined}>
-                        <CartesianGrid strokeDasharray="3 3" />
+                  {/* Forecast Chart - Enhanced */}
+                  <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-gray-200">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h3 className="text-xl font-bold text-gray-900">
+                          📈 Historique et Prévisions
+                        </h3>
+                        <p className="text-sm text-gray-500 mt-1">
+                          Modèle: <span className="font-semibold text-orange-600">{forecastModel.toUpperCase()}</span> | 
+                          Machine: <span className="font-semibold">{forecastMachine}</span> | 
+                          Pièce: <span className="font-semibold">{forecastPart}</span>
+                        </p>
+                      </div>
+                      <div className="flex gap-2 text-xs">
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                          <span>Historique</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                          <span>Prévision</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-0.5 bg-gray-400"></div>
+                          <span>Confiance</span>
+                        </div>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={500}>
+                      <LineChart 
+                        data={forecastResult.combined}
+                        margin={{ top: 10, right: 50, left: 20, bottom: 70 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#f97316" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#f97316" stopOpacity={0.05}/>
+                          </linearGradient>
+                          <linearGradient id="colorForecast" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.05}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                         <XAxis 
                           dataKey="month" 
                           angle={-45} 
                           textAnchor="end" 
                           height={80}
+                          tick={{ fontSize: 10, fill: '#6b7280' }}
+                          stroke="#9ca3af"
+                          interval={Math.floor(forecastResult.combined.length / 12)} // Afficher tous les N mois
                         />
                         <YAxis 
-                          label={{ value: 'Quantité', angle: -90, position: 'insideLeft' }}
+                          label={{ 
+                            value: 'Quantité de pièces', 
+                            angle: -90, 
+                            position: 'insideLeft',
+                            style: { fontSize: 13, fill: '#374151', fontWeight: 600 }
+                          }}
+                          tick={{ fontSize: 11, fill: '#6b7280' }}
+                          stroke="#9ca3af"
                         />
-                        <Tooltip />
-                        <Legend />
+                        <Tooltip 
+                          contentStyle={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.98)',
+                            border: '2px solid #e5e7eb',
+                            borderRadius: '12px',
+                            padding: '16px',
+                            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)'
+                          }}
+                          labelStyle={{ fontWeight: 'bold', color: '#1f2937', marginBottom: '8px', fontSize: '13px' }}
+                          itemStyle={{ fontSize: '12px', padding: '4px 0' }}
+                        />
+                        <Legend 
+                          wrapperStyle={{ paddingTop: '20px', fontSize: '13px' }}
+                          iconType="line"
+                          iconSize={20}
+                        />
+                        {/* Confidence interval - upper bound (subtle, behind forecast) */}
+                        <Line 
+                          type="monotone" 
+                          dataKey="upper" 
+                          stroke="#d1d5db" 
+                          strokeWidth={1}
+                          strokeDasharray="2 4"
+                          name="Borne sup."
+                          dot={false}
+                          opacity={0.5}
+                        />
+                        {/* Confidence interval - lower bound (subtle, behind forecast) */}
+                        <Line 
+                          type="monotone" 
+                          dataKey="lower" 
+                          stroke="#d1d5db" 
+                          strokeWidth={1}
+                          strokeDasharray="2 4"
+                          name="Borne inf."
+                          dot={false}
+                          opacity={0.5}
+                        />
+                        {/* Historical data - Orange line with area fill */}
                         <Line 
                           type="monotone" 
                           dataKey="actual" 
                           stroke="#f97316" 
-                          strokeWidth={2}
-                          name="Historique"
-                          dot={{ fill: '#f97316', r: 4 }}
+                          strokeWidth={3}
+                          name="📊 Historique"
+                          dot={{ fill: '#f97316', r: 5, strokeWidth: 2, stroke: '#fff' }}
+                          activeDot={{ r: 8, strokeWidth: 3, stroke: '#fff' }}
+                          fill="url(#colorActual)"
                         />
+                        {/* Forecast - Green dashed line with area fill (on top) */}
                         <Line 
                           type="monotone" 
                           dataKey="forecast" 
                           stroke="#10b981" 
-                          strokeWidth={2}
-                          strokeDasharray="5 5"
-                          name="Prévision"
-                          dot={{ fill: '#10b981', r: 4 }}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="lower" 
-                          stroke="#94a3b8" 
-                          strokeWidth={1}
-                          strokeDasharray="2 2"
-                          name="Borne inf. (70%)"
-                          dot={false}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="upper" 
-                          stroke="#94a3b8" 
-                          strokeWidth={1}
-                          strokeDasharray="2 2"
-                          name="Borne sup. (70%)"
-                          dot={false}
+                          strokeWidth={4}
+                          strokeDasharray="12 6"
+                          name="🔮 Prévisions ML"
+                          dot={{ fill: '#10b981', r: 6, strokeWidth: 2, stroke: '#fff' }}
+                          activeDot={{ r: 9, strokeWidth: 3, stroke: '#fff' }}
+                          fill="url(#colorForecast)"
                         />
                       </LineChart>
                     </ResponsiveContainer>
+                    
+                    {/* Chart Info */}
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <div className="flex items-center gap-4">
+                          <span>📊 {forecastResult.historical?.length || 0} mois historiques</span>
+                          <span>🔮 {forecastResult.forecasts?.length || 0} mois de prévision</span>
+                          <span>🎯 Horizon: {forecastHorizon} mois</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-medium">Entraîné le: </span>
+                          <span>{new Date(forecastResult.trainedAt).toLocaleDateString('fr-FR')}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Forecast Table */}
@@ -1526,7 +1766,7 @@ export default function PDRPage() {
                     </li>
                     <li className="flex items-start">
                       <span className="text-amber-600 mr-2">3.</span>
-                      <span>Configurez l'<strong>horizon</strong> (1-12 mois) et le <strong>modèle</strong> (Prophet/ARIMA/SARIMA/GRU)</span>
+                      <span>Configurez l'<strong>horizon</strong> (1-12 mois) et le <strong>modèle</strong> (Prophet/ARIMA/SARIMA/LSTM)</span>
                     </li>
                     <li className="flex items-start">
                       <span className="text-amber-600 mr-2">4.</span>
@@ -1751,7 +1991,7 @@ export default function PDRPage() {
                     <div className="mb-6 bg-white rounded-lg p-5 border border-orange-200">
                       <h4 className="font-semibold text-orange-900 mb-4 flex items-center gap-2">
                         <span className="text-xl">🧠</span>
-                        LSTM/GRU Configuration
+                        LSTM Configuration
                       </h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>

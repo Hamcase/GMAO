@@ -48,7 +48,35 @@ yarn-error.log*
 .contentlayer/
 
 # temp data samples (actual user data, should not be committed)
-temp-data-samples/*.xlsx
-temp-data-samples/*.csv
-temp-data-samples/*.xls
+temp-data-samples/
 !temp-data-samples/README.md
+
+# Python virtual environment
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Environment variables and secrets
+.env
+.env.*
+*.key
+*.pem
+*.cert
+secrets/
+config/secrets.*
+
+# Database files
+*.sqlite3
+*.db
+chroma_db/
+test_chroma_db/
+
+# PDF storage and uploads
+pdf_storage/
+uploads/
+
+# Markdown documentation files
+*.md
+!README.md
+!LICENSE

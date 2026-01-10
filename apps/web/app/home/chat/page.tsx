@@ -206,11 +206,27 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@kit/
 import { Alert, AlertDescription, AlertTitle } from '@kit/ui/alert';
 import { ScrollArea } from '@kit/ui/scroll-area'; // Pour la zone de chat scrollable
 import { Avatar, AvatarFallback, AvatarImage } from "@kit/ui/avatar"; // Pour les icônes utilisateur/bot
+import { MessageSquare, Send, Loader2 } from 'lucide-react';
+import PDFViewerWithHighlight from '../../../components/PDFViewerWithHighlight'; // Import du viewer PDF
 
 // 3. Interfaces pour les messages et les sources
 interface Source {
   document_name: string;
   content_preview: string;
+  page_number?: number;
+}
+
+interface Citation {
+  citation_number: number;
+  document_name: string;
+  page_number: number;
+  chunk_index: number;
+  char_start: number;
+  char_end: number;
+  text: string;
+  keywords?: string | string[]; // Can be comma-separated string or array
+  score?: number;
+  rerank_score?: number;
 }
 
 interface Message {
@@ -218,11 +234,24 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   sources?: Source[]; // Les sources ne s'appliquent qu'aux messages de l'assistant
+  citations?: Citation[]; // Nouvelles citations avec positions précises
 }
 
 // Composant pour afficher le texte avec citations cliquables
-function MessageWithCitations({ content, sources }: { content: string; sources: Source[] }) {
-  if (sources.length === 0) return <p>{content}</p>;
+function MessageWithCitations({ 
+  content, 
+  sources, 
+  citations, 
+  onCitationClick 
+}: { 
+  content: string; 
+  sources: Source[]; 
+  citations?: Citation[];
+  onCitationClick: (citation: Citation) => void;
+}) {
+  if (!citations || citations.length === 0) {
+    return <p>{content}</p>;
+  }
 
   // Trouver les citations [1], [2], etc. dans le texte
   const citationRegex = /\[(\d+)\]/g;
@@ -236,34 +265,23 @@ function MessageWithCitations({ content, sources }: { content: string; sources: 
       parts.push(content.substring(lastIndex, match.index));
     }
 
-    // Ajouter la citation cliquable
+    // Ajouter la citation cliquable avec PDF viewer
     const citationNum = parseInt(match[1] || '0');
-    const sourceIndex = citationNum - 1;
+    const citation = citations.find(c => c.citation_number === citationNum);
     
-    if (sourceIndex >= 0 && sourceIndex < sources.length) {
-      const source = sources[sourceIndex];
-      if (!source) continue;
-      
-      const messageId = Date.now(); // Dans un contexte réel, utiliser l'ID du message parent
+    if (citation) {
       parts.push(
         <button
           key={`cite-${match.index}`}
-          onClick={() => {
-            const sourceElement = document.getElementById(`source-${messageId}-${sourceIndex}`);
-            sourceElement?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            sourceElement?.classList.add('ring-2', 'ring-primary');
-            setTimeout(() => {
-              sourceElement?.classList.remove('ring-2', 'ring-primary');
-            }, 2000);
-          }}
-          className="mx-0.5 inline-flex h-4 w-4 items-center justify-center rounded bg-primary/20 text-[10px] font-bold text-primary hover:bg-primary/30 transition-colors"
-          title={`Voir source: ${source.document_name}`}
+          onClick={() => onCitationClick(citation)}
+          className="mx-0.5 inline-flex h-5 w-5 items-center justify-center rounded bg-blue-500 text-[10px] font-bold text-white hover:bg-blue-600 transition-colors shadow-sm"
+          title={`Voir source: ${citation.document_name} (page ${citation.page_number})`}
         >
           {citationNum}
         </button>
       );
     } else {
-      parts.push(match[0]); // Garder le texte original si l'index est invalide
+      parts.push(match[0]); // Garder le texte original si citation non trouvée
     }
 
     lastIndex = match.index + match[0].length;
@@ -284,6 +302,9 @@ export default function ChatPage() {
   const [currentQuery, setCurrentQuery] = useState(''); // Ce que l'utilisateur tape
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null); // Citation sélectionnée pour PDF viewer
+  const [pdfUrl, setPdfUrl] = useState<string>(''); // URL du PDF à afficher
+  const [showPdfPanel, setShowPdfPanel] = useState(false); // Show/hide PDF side panel
 
   // Référence pour scroller automatiquement vers le bas
   const viewportRef = useRef<HTMLDivElement>(null); // Référence ajoutée pour le viewport
@@ -301,6 +322,62 @@ export default function ChatPage() {
        viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
      }
    }, [messages]);
+
+  // Handler pour ouvrir le PDF viewer avec une citation
+  const handleCitationClick = async (citation: Citation) => {
+    try {
+      // Récupérer la session pour avoir le token
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData.session) {
+        console.error('No session found:', sessionError);
+        alert('Session expirée. Veuillez vous reconnecter.');
+        return;
+      }
+
+      const userId = sessionData.session.user.id;
+      const token = sessionData.session.access_token;
+      
+      // Construire l'URL du PDF depuis le backend local
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+      const pdfUrl = `${backendUrl}/api/v1/pdf/${userId}/${encodeURIComponent(citation.document_name)}?token=${token}`;
+      
+      console.log('Loading PDF from local storage:', pdfUrl);
+      
+      // Vérifier que le PDF est accessible
+      const response = await fetch(pdfUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          alert(`Le fichier "${citation.document_name}" n'est pas disponible.\n\nLe document a été indexé dans ChromaDB mais n'a pas été sauvegardé localement.\n\nVérifiez les logs backend pour plus de détails.`);
+        } else if (response.status === 403) {
+          alert('Accès refusé. Vous ne pouvez accéder qu\'à vos propres documents.');
+        } else {
+          alert(`Erreur lors du chargement du PDF: ${response.statusText}`);
+        }
+        return;
+      }
+      
+      // Le PDF est accessible, ouvrir le viewer side panel
+      setPdfUrl(pdfUrl);
+      setSelectedCitation(citation);
+      setShowPdfPanel(true);
+      
+    } catch (error) {
+      console.error('Error loading PDF:', error);
+      alert('Erreur lors du chargement du PDF.');
+    }
+  };
+
+  // Handler pour fermer le PDF panel
+  const handleClosePdfPanel = () => {
+    setShowPdfPanel(false);
+    setSelectedCitation(null);
+    setPdfUrl('');
+  };
 
 
   // 6. Fonction pour envoyer la question au backend
@@ -357,6 +434,7 @@ export default function ChatPage() {
         role: 'assistant',
         content: data.answer || "Désolé, je n'ai pas pu générer de réponse.",
         sources: data.sources || [],
+        citations: data.citations || [], // Nouvelles citations avec positions
       };
       setMessages((prev) => [...prev, assistantMessage]);
 
@@ -372,16 +450,21 @@ export default function ChatPage() {
 
   // 7. L'interface utilisateur (JSX)
   return (
-    <div className="flex h-[calc(100vh-theme(space.24))] flex-col p-4 md:p-6"> {/* Hauteur calculée pour remplir l'écran moins le header potentiel */}
-      {/* En-tête (optionnel, peut être intégré dans le layout principal) */}
-      <Card className="mb-4 flex-shrink-0">
-        <CardHeader>
-          <CardTitle>Chatbot GMAO+IA</CardTitle>
-          <CardDescription>
-            Interrogez vos documents de maintenance.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+    <div className="flex h-[calc(100vh-theme(space.24))] gap-4 p-4 md:p-6"> {/* Flex row layout for chat + PDF panel */}
+      {/* Main Chat Area */}
+      <div className={`flex flex-col transition-all duration-300 ${showPdfPanel ? 'w-1/2' : 'w-full'}`}>
+      {/* En-tête simplifié */}
+      <div className="mb-4 flex-shrink-0">
+        <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30 rounded-lg border border-purple-200 dark:border-purple-800">
+          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-purple-500 dark:bg-purple-600">
+            <MessageSquare className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Assistant IA GMAO</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">Posez vos questions sur vos documents</p>
+          </div>
+        </div>
+      </div>
 
       {/* Zone de chat scrollable */}
        <ScrollArea className="flex-grow rounded-md border p-4 mb-4">
@@ -412,7 +495,12 @@ export default function ChatPage() {
                 {/* Contenu du message avec citations cliquables */}
                 <div className="whitespace-pre-wrap">
                   {message.role === 'assistant' ? (
-                    <MessageWithCitations content={message.content} sources={message.sources || []} />
+                    <MessageWithCitations 
+                      content={message.content} 
+                      sources={message.sources || []} 
+                      citations={message.citations}
+                      onCitationClick={handleCitationClick}
+                    />
                   ) : (
                     <p>{message.content}</p>
                   )}
@@ -469,22 +557,44 @@ export default function ChatPage() {
         </Alert>
       )}
 
-      {/* Zone de saisie en bas */}
-      <div className="flex w-full items-center space-x-2 flex-shrink-0">
+      {/* Zone de saisie moderne en bas */}
+      <div className="flex w-full items-center gap-2 flex-shrink-0 p-4 bg-white dark:bg-gray-900 rounded-lg border-2 border-gray-200 dark:border-gray-700 focus-within:border-purple-500 dark:focus-within:border-purple-500 transition-colors">
         <Input
           id="chat-input"
           type="text"
-          placeholder="Posez votre question ici..."
+          placeholder="Posez votre question sur vos documents..."
           value={currentQuery}
           onChange={(e) => setCurrentQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !loading) { handleSendMessage(); } }}
           disabled={loading}
-          className="flex-grow"
+          className="flex-grow border-0 focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
         />
-        <Button onClick={handleSendMessage} disabled={loading || !currentQuery.trim()}>
-          Envoyer
+        <Button 
+          onClick={handleSendMessage} 
+          disabled={loading || !currentQuery.trim()}
+          size="lg"
+          className="bg-purple-600 hover:bg-purple-700 dark:bg-purple-600 dark:hover:bg-purple-700"
+        >
+          {loading ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <Send className="h-5 w-5" />
+          )}
         </Button>
       </div>
+
+      </div>
+
+      {/* PDF Side Panel */}
+      {showPdfPanel && selectedCitation && pdfUrl && (
+        <div className="w-1/2 flex flex-col border-l border-gray-200 dark:border-gray-700">
+          <PDFViewerWithHighlight
+            pdfUrl={pdfUrl}
+            citation={selectedCitation}
+            onClose={handleClosePdfPanel}
+          />
+        </div>
+      )}
     </div>
   );
 }
