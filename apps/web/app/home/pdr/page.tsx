@@ -134,7 +134,12 @@ export default function PDRPage() {
   const loadMachines = async () => {
     try {
       const allRecords = await db.pdrHistory.toArray();
+      console.log('📊 PDR Records found:', allRecords.length);
+      console.log('📊 Sample records:', allRecords.slice(0, 3));
+      
       const uniqueMachines = Array.from(new Set(allRecords.map(r => r.machine))).sort();
+      console.log('🏭 Unique machines:', uniqueMachines);
+      
       setMachines(uniqueMachines);
     } catch (error) {
       console.error('Error loading machines:', error);

@@ -208,6 +208,7 @@ import { ScrollArea } from '@kit/ui/scroll-area'; // Pour la zone de chat scroll
 import { Avatar, AvatarFallback, AvatarImage } from "@kit/ui/avatar"; // Pour les icônes utilisateur/bot
 import { MessageSquare, Send, Loader2 } from 'lucide-react';
 import PDFViewerWithHighlight from '../../../components/PDFViewerWithHighlight'; // Import du viewer PDF
+import { DocumentList } from './_components/document-list';
 
 // 3. Interfaces pour les messages et les sources
 interface Source {
@@ -589,10 +590,18 @@ export default function ChatPage() {
       {showPdfPanel && selectedCitation && pdfUrl && (
         <div className="w-1/2 flex flex-col border-l border-gray-200 dark:border-gray-700">
           <PDFViewerWithHighlight
+            key={`${selectedCitation.document_name}-${selectedCitation.citation_number}-${selectedCitation.page_number}`}
             pdfUrl={pdfUrl}
             citation={selectedCitation}
             onClose={handleClosePdfPanel}
           />
+        </div>
+      )}
+
+      {/* Section Documents OCR - Scrollez vers le bas */}
+      {!showPdfPanel && (
+        <div className="mt-8 border-t pt-6">
+          <DocumentList />
         </div>
       )}
     </div>

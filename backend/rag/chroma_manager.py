@@ -171,6 +171,18 @@ class ChromaManager:
         collection = self.get_or_create_collection(user_id)
         
         try:
+            # First, get all documents to see what we have
+            all_results = collection.get(include=["metadatas"])
+            logger.info(f"Total chunks in collection: {len(all_results['ids'])}")
+            
+            # Log all unique document names for debugging
+            doc_names = set()
+            for metadata in all_results['metadatas']:
+                if 'document_name' in metadata:
+                    doc_names.add(metadata['document_name'])
+            logger.info(f"Documents in collection: {doc_names}")
+            logger.info(f"Looking for document: '{document_name}'")
+            
             # Get all IDs for this document
             results = collection.get(
                 where={"document_name": document_name},
@@ -178,11 +190,13 @@ class ChromaManager:
             )
             
             if results['ids']:
+                logger.info(f"Found {len(results['ids'])} chunks to delete for '{document_name}'")
                 collection.delete(ids=results['ids'])
-                logger.info(f"Deleted {len(results['ids'])} chunks from {document_name}")
+                logger.info(f"✅ Successfully deleted {len(results['ids'])} chunks from '{document_name}'")
                 return len(results['ids'])
             else:
-                logger.info(f"No chunks found for {document_name}")
+                logger.warning(f"❌ No chunks found for document '{document_name}'")
+                logger.warning(f"Available documents: {doc_names}")
                 return 0
         except Exception as e:
             logger.error(f"Error deleting document: {e}")

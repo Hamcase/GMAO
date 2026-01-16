@@ -37,6 +37,12 @@ import {
   Search,
   Calendar,
   Package,
+  BookOpen,
+  UserX,
+  Lightbulb,
+  TrendingDown as TrendDown,
+  UserCheck,
+  Briefcase,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
 import { useWorkOrders, useAssets } from '@kit/shared/localdb/hooks';
@@ -78,6 +84,35 @@ interface MachineInsight {
   criticality: string;
 }
 
+// NEW: Skill Gap Analysis
+interface SkillGap {
+  skill: string;
+  demandCount: number;
+  qualifiedTechnicians: number;
+  gap: number;
+  impactedInterventions: number;
+  avgDelay: number;
+}
+
+// NEW: Workload Alert
+interface WorkloadAlert {
+  technicianName: string;
+  weeklyHours: number;
+  capacityPercent: number;
+  status: 'overloaded' | 'optimal' | 'underutilized';
+  recommendation: string;
+}
+
+// NEW: Technician-Machine Correlation
+interface TechnicianPerformanceCorrelation {
+  technicianName: string;
+  machinesServiced: number;
+  avgSuccessRate: number;
+  preventiveImpact: number;
+  qualityScore: number;
+  repeatFailureRate: number;
+}
+
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316'];
 
 export default function InsightsPage() {
@@ -87,6 +122,39 @@ export default function InsightsPage() {
   const [technicianSearch, setTechnicianSearch] = useState('');
   const [technicianFilter, setTechnicianFilter] = useState<string>('all');
   const [machineRiskFilter, setMachineRiskFilter] = useState<string>('all');
+  const [showAdvancedAnalytics, setShowAdvancedAnalytics] = useState(true);
+  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Format: 'YYYY-MM' or 'all'
+
+  // Generate available months from workOrders
+  const availableMonths = useMemo(() => {
+    if (!workOrders || workOrders.length === 0) return [];
+    
+    const monthsSet = new Set<string>();
+    workOrders.forEach(wo => {
+      const date = wo.endAt || wo.startAt || wo.createdAt;
+      if (date) {
+        const d = new Date(date);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        monthsSet.add(monthKey);
+      }
+    });
+    
+    return Array.from(monthsSet).sort().reverse();
+  }, [workOrders]);
+
+  // Filter workOrders by selected month
+  const filteredWorkOrders = useMemo(() => {
+    if (!workOrders || selectedMonth === 'all') return workOrders;
+    
+    return workOrders.filter(wo => {
+      const date = wo.endAt || wo.startAt || wo.createdAt;
+      if (!date) return false;
+      
+      const d = new Date(date);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return monthKey === selectedMonth;
+    });
+  }, [workOrders, selectedMonth]);
 
   // Calculate technician statistics
   const technicianStats = useMemo<TechnicianStats[]>(() => {
@@ -142,25 +210,41 @@ export default function InsightsPage() {
         stats.plannedRepairs += 1;
       }
 
-      // Calculate repair time (in hours)
+      // Calculate repair time (in hours) - SIMPLIFIED AND CONSERVATIVE
+      let interventionHours = 0;
+      
+      // ONLY use real date calculations, ignore potentially corrupted custom columns
       if (wo.startAt && wo.endAt) {
         const startDate = new Date(wo.startAt);
         const endDate = new Date(wo.endAt);
         const repairHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
-        if (repairHours > 0 && repairHours < 1000) { // Sanity check
+        
+        // VERY Strict validation: between 0.1h and 8h (1 workday max per intervention)
+        // This prevents overnight/multi-day accumulations
+        if (repairHours > 0.1 && repairHours <= 8) {
           stats.repairTimes.push(repairHours);
-          stats.totalMinutes += repairHours * 60;
+          interventionHours = repairHours;
+        } else if (repairHours > 8 && repairHours <= 24) {
+          // If between 8-24h, assume it's a 1-day intervention (capped at 8h)
+          stats.repairTimes.push(8);
+          interventionHours = 8;
         }
+        // If > 24h, ignore completely as it's likely bad data
       }
 
-      // Sum hours from customColumns
-      const totalHours = wo.customColumns?.totalHours || 0;
-      const internalHours = wo.customColumns?.internalHours || 0;
-      const externalHours = wo.customColumns?.externalHours || 0;
-      
-      stats.totalHours += totalHours;
-      stats.internalHours += internalHours;
-      stats.externalHours += externalHours;
+      // Conservative approach: use ONLY calculated hours OR sensible defaults
+      // Completely ignore customColumns hours as they may be corrupted/cumulative
+      if (interventionHours > 0) {
+        // We have real data from dates
+        stats.totalHours += interventionHours;
+        stats.internalHours += interventionHours;
+        stats.externalHours += 0; // Don't add external without proof
+      } else {
+        // No dates available: use VERY conservative estimates
+        const estimatedHours = wo.endAt ? 1.5 : (wo.startAt ? 1 : 0.5); // Completed: 1.5h, In-progress: 1h, Planned: 0.5h
+        stats.totalHours += estimatedHours;
+        stats.internalHours += estimatedHours;
+      }
 
       // Cost
       const cost = wo.customColumns?.cost || 0;
@@ -196,6 +280,15 @@ export default function InsightsPage() {
       const avgRepairTime = stats.repairTimes.length > 0
         ? stats.repairTimes.reduce((sum: number, time: number) => sum + time, 0) / stats.repairTimes.length
         : 0;
+
+      // DEBUG LOG - See actual values
+      console.log(`📊 ${stats.name}:`, {
+        totalRepairs: stats.totalRepairs,
+        totalHours: Math.round(stats.totalHours * 10) / 10,
+        internalHours: Math.round(stats.internalHours * 10) / 10,
+        avgPerIntervention: stats.totalRepairs > 0 ? (stats.totalHours / stats.totalRepairs).toFixed(1) + 'h' : 'N/A',
+        repairTimesCount: stats.repairTimes.length,
+      });
 
       // Calculate efficiency (repairs completed per hour worked)
       const efficiency = stats.totalHours > 0 
@@ -249,15 +342,15 @@ export default function InsightsPage() {
         efficiency: Math.round(efficiency * 10) / 10,
       };
     }).sort((a, b) => b.rating - a.rating);
-  }, [workOrders]);
+  }, [filteredWorkOrders]);
 
   // Calculate machine insights
   const machineInsights = useMemo<MachineInsight[]>(() => {
-    if (!workOrders || workOrders.length === 0 || !assets) return [];
+    if (!filteredWorkOrders || filteredWorkOrders.length === 0 || !assets) return [];
 
     const machineMap = new Map<string, any>();
 
-    workOrders.forEach((wo) => {
+    filteredWorkOrders.forEach((wo) => {
       // Get machine from assetId or customColumns
       const assetId = wo.assetId;
       const asset = assets.find((a) => a.id === assetId);
@@ -418,7 +511,222 @@ export default function InsightsPage() {
         criticality: machine.criticality,
       };
     }).sort((a, b) => b.riskScore - a.riskScore);
-  }, [workOrders, assets]);
+  }, [filteredWorkOrders, assets]);
+
+  // ========== NEW: SKILL GAP ANALYSIS ==========
+  const skillGapAnalysis = useMemo<SkillGap[]>(() => {
+    if (!filteredWorkOrders || !technicianStats.length) return [];
+
+    // Count demand for each skill type
+    const skillDemand: Record<string, { count: number; delays: number[]; }> = {};
+    const technicianSkills: Record<string, Set<string>> = {};
+
+    // Build technician skills map from specializations
+    technicianStats.forEach(tech => {
+      technicianSkills[tech.name] = new Set(
+        tech.specializations.map(s => s.type)
+      );
+    });
+
+    // Analyze work orders for skill gaps
+    filteredWorkOrders.forEach(wo => {
+      const skillRequired = wo.customColumns?.failureType || wo.type || 'Other';
+      
+      if (!skillDemand[skillRequired]) {
+        skillDemand[skillRequired] = { count: 0, delays: [] };
+      }
+      skillDemand[skillRequired].count += 1;
+
+      // Calculate delay if intervention was delayed
+      if (wo.createdAt && wo.startAt) {
+        const delay = (new Date(wo.startAt).getTime() - new Date(wo.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+        if (delay > 1) { // More than 1 day delay
+          skillDemand[skillRequired].delays.push(delay);
+        }
+      }
+    });
+
+    // Calculate gaps
+    return Object.entries(skillDemand)
+      .map(([skill, data]) => {
+        // Count qualified technicians for this skill
+        const qualified = Array.from(Object.values(technicianSkills))
+          .filter(skillSet => skillSet.has(skill))
+          .length;
+
+        const avgDelay = data.delays.length > 0
+          ? data.delays.reduce((a, b) => a + b, 0) / data.delays.length
+          : 0;
+
+        return {
+          skill,
+          demandCount: data.count,
+          qualifiedTechnicians: qualified,
+          gap: Math.max(0, data.count - qualified * 10), // Assume 1 tech can handle ~10 interventions
+          impactedInterventions: data.delays.length,
+          avgDelay: Math.round(avgDelay * 10) / 10,
+        };
+      })
+      .filter(gap => gap.gap > 0 || gap.impactedInterventions > 3)
+      .sort((a, b) => b.gap - a.gap)
+      .slice(0, 5);
+  }, [filteredWorkOrders, technicianStats]);
+
+  // ========== NEW: WORKLOAD ALERTS ==========
+  const workloadAlerts = useMemo<WorkloadAlert[]>(() => {
+    if (!workOrders || !technicianStats.length) return [];
+
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const oneWeekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    return technicianStats.map(tech => {
+      // Calculate upcoming workload (next 7 days)
+      const upcomingWork = workOrders.filter(wo => {
+        const techName = wo.customColumns?.staffFirstName && wo.customColumns?.staffLastName
+          ? `${wo.customColumns.staffFirstName} ${wo.customColumns.staffLastName}`.trim()
+          : wo.assignee?.trim();
+        
+        const isThisTech = techName === tech.name;
+        const startDate = wo.startAt ? new Date(wo.startAt) : null;
+        const isUpcoming = startDate && startDate >= now && startDate <= oneWeekAhead;
+
+        return isThisTech && (isUpcoming || !wo.endAt); // Include in-progress and upcoming
+      });
+
+      // Sum estimated hours - USE REALISTIC ESTIMATES
+      const weeklyHours = upcomingWork.reduce((sum, wo) => {
+        let estimatedHours = 0;
+        
+        // 1. Try to calculate from dates if available
+        if (wo.startAt && wo.endAt) {
+          const duration = (new Date(wo.endAt).getTime() - new Date(wo.startAt).getTime()) / (1000 * 60 * 60);
+          if (duration > 0 && duration < 100) {
+            estimatedHours = duration;
+          }
+        }
+        
+        // 2. Fallback: use custom hours with sanity checks
+        if (estimatedHours === 0) {
+          const customInternal = wo.customColumns?.internalHours || 0;
+          const customTotal = wo.customColumns?.totalHours || 0;
+          
+          // Use internal hours first (more reliable), cap at 24h per intervention
+          if (customInternal > 0 && customInternal < 24) {
+            estimatedHours = customInternal;
+          } else if (customTotal > 0 && customTotal < 24) {
+            estimatedHours = customTotal;
+          } else {
+            // Default: 4h for typical intervention
+            estimatedHours = 4;
+          }
+        }
+        
+        return sum + estimatedHours;
+      }, 0);
+
+      const capacityPercent = Math.round((weeklyHours / 40) * 100); // Assume 40h/week capacity
+
+      let status: 'overloaded' | 'optimal' | 'underutilized';
+      let recommendation: string;
+
+      if (capacityPercent > 120) {
+        status = 'overloaded';
+        recommendation = `⚠️ Risque de surcharge - Réassigner ${Math.round((weeklyHours - 48) / 8)} interventions`;
+      } else if (capacityPercent > 100) {
+        status = 'overloaded';
+        recommendation = '⚡ Surcharge légère - Surveiller';
+      } else if (capacityPercent < 50) {
+        status = 'underutilized';
+        recommendation = `💡 Capacité disponible - Peut prendre ${Math.round((40 - weeklyHours) / 8)} interventions`;
+      } else {
+        status = 'optimal';
+        recommendation = '✅ Charge optimale';
+      }
+
+      return {
+        technicianName: tech.name,
+        weeklyHours: Math.round(weeklyHours * 10) / 10,
+        capacityPercent,
+        status,
+        recommendation,
+      };
+    })
+    .filter(alert => alert.status !== 'optimal') // Only show alerts
+    .sort((a, b) => b.capacityPercent - a.capacityPercent);
+  }, [filteredWorkOrders, technicianStats]);
+
+  // ========== NEW: TECHNICIAN-MACHINE CORRELATION ==========
+  const technicianPerformanceCorrelation = useMemo<TechnicianPerformanceCorrelation[]>(() => {
+    if (!filteredWorkOrders || !technicianStats.length) return [];
+
+    return technicianStats.map(tech => {
+      // Get all work orders for this technician
+      const techWorkOrders = filteredWorkOrders.filter(wo => {
+        const techName = wo.customColumns?.staffFirstName && wo.customColumns?.staffLastName
+          ? `${wo.customColumns.staffFirstName} ${wo.customColumns.staffLastName}`.trim()
+          : wo.assignee?.trim();
+        return techName === tech.name;
+      });
+
+      // Count unique machines serviced
+      const uniqueMachines = new Set(
+        techWorkOrders.map(wo => wo.assetId || wo.customColumns?.machine).filter(Boolean)
+      );
+
+      // Calculate preventive vs corrective ratio
+      const preventiveCount = techWorkOrders.filter(wo => 
+        wo.type?.toLowerCase().includes('preventive') || wo.type?.toLowerCase().includes('préventive')
+      ).length;
+
+      const preventiveRatio = techWorkOrders.length > 0 
+        ? (preventiveCount / techWorkOrders.length) * 100 
+        : 0;
+
+      // Calculate repeat failure rate (failures within 30 days of same machine)
+      let repeatFailures = 0;
+      const machineLastRepair: Record<string, Date> = {};
+
+      techWorkOrders
+        .sort((a, b) => {
+          const dateA = a.endAt || a.startAt || a.createdAt;
+          const dateB = b.endAt || b.startAt || b.createdAt;
+          return (dateA ? new Date(dateA).getTime() : 0) - (dateB ? new Date(dateB).getTime() : 0);
+        })
+        .forEach(wo => {
+          const machine = wo.assetId || wo.customColumns?.machine;
+          const repairDate = wo.endAt || wo.startAt;
+
+          if (machine && repairDate) {
+            const date = new Date(repairDate);
+            if (machineLastRepair[machine]) {
+              const daysSince = (date.getTime() - machineLastRepair[machine].getTime()) / (1000 * 60 * 60 * 24);
+              if (daysSince <= 30) {
+                repeatFailures += 1;
+              }
+            }
+            machineLastRepair[machine] = date;
+          }
+        });
+
+      const repeatFailureRate = techWorkOrders.length > 0
+        ? (repeatFailures / techWorkOrders.length) * 100
+        : 0;
+
+      // Quality score (inverse of repeat failures + success rate)
+      const qualityScore = Math.max(0, tech.successRate - repeatFailureRate);
+
+      return {
+        technicianName: tech.name,
+        machinesServiced: uniqueMachines.size,
+        avgSuccessRate: tech.successRate,
+        preventiveImpact: Math.round(preventiveRatio),
+        qualityScore: Math.round(qualityScore),
+        repeatFailureRate: Math.round(repeatFailureRate * 10) / 10,
+      };
+    })
+    .sort((a, b) => b.qualityScore - a.qualityScore);
+  }, [filteredWorkOrders, technicianStats]);
 
   // Filter technicians
   const filteredTechnicians = useMemo(() => {
@@ -512,6 +820,62 @@ export default function InsightsPage() {
           </div>
         </div>
 
+        {/* Month Filter */}
+        <Card className="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-950 dark:to-blue-950 border-purple-200 dark:border-purple-800">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                <span className="text-sm font-medium text-purple-900 dark:text-purple-100">
+                  Filtrer par période:
+                </span>
+              </div>
+              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Sélectionner un mois" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Toutes les périodes</SelectItem>
+                  {availableMonths.map((month) => {
+                    const [year, monthNum] = month.split('-');
+                    const date = new Date(parseInt(year), parseInt(monthNum) - 1);
+                    const monthName = date.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+                    return (
+                      <SelectItem key={month} value={month}>
+                        {monthName.charAt(0).toUpperCase() + monthName.slice(1)}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              {selectedMonth !== 'all' && (
+                <Badge variant="secondary" className="ml-2">
+                  {filteredWorkOrders?.length || 0} interventions ce mois
+                </Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Data Quality Info Banner */}
+        <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/50">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <Brain className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-blue-900 dark:text-blue-100 mb-1">
+                  📊 Calcul optimisé des heures de travail
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  Les heures sont calculées depuis les <strong>dates réelles</strong> d'intervention (limitées à 8h max/intervention pour éviter les cumuls). 
+                  Estimations conservatrices : 1.5h (terminé), 1h (en cours), 0.5h (planifié). 
+                  <strong>💡 Astuce :</strong> Utilisez le filtre par mois ci-dessus pour voir des périodes plus courtes.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Summary Statistics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 border-blue-200 dark:border-blue-800">
@@ -569,6 +933,386 @@ export default function InsightsPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* ========== NEW: ADVANCED ANALYTICS SECTION ========== */}
+        {showAdvancedAnalytics && (
+          <Card className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950 dark:to-purple-950 border-2 border-indigo-200 dark:border-indigo-800">
+            <CardHeader>
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-2xl">
+                    <Brain className="h-6 w-6 text-indigo-600" />
+                    Analyses Intelligentes Avancées
+                  </CardTitle>
+                  <CardDescription className="mt-2">
+                    Détection de gaps, prédictions de surcharge, et corrélations de performance
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAdvancedAnalytics(!showAdvancedAnalytics)}
+                >
+                  Masquer
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* SKILL GAP ANALYSIS */}
+              {skillGapAnalysis.length > 0 && (
+                <Card className="border-2 border-orange-200 dark:border-orange-800">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <BookOpen className="h-5 w-5 text-orange-600" />
+                      🎓 Détection de Compétences Manquantes
+                    </CardTitle>
+                    <CardDescription>
+                      Identification des gaps de compétences impactant la réactivité
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {skillGapAnalysis.map((gap, idx) => (
+                        <div
+                          key={gap.skill}
+                          className="p-4 rounded-lg bg-white dark:bg-gray-900 border-2 border-orange-200 dark:border-orange-800"
+                        >
+                          <div className="flex items-start justify-between flex-wrap gap-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Badge variant="destructive" className="text-sm">
+                                  Gap #{idx + 1}
+                                </Badge>
+                                <h3 className="font-bold text-lg">{gap.skill}</h3>
+                              </div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Demande</div>
+                                  <div className="text-xl font-bold text-orange-600">{gap.demandCount}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Techniciens qualifiés</div>
+                                  <div className="text-xl font-bold text-blue-600">{gap.qualifiedTechnicians}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Interventions retardées</div>
+                                  <div className="text-xl font-bold text-red-600">{gap.impactedInterventions}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-muted-foreground">Délai moyen</div>
+                                  <div className="text-xl font-bold text-purple-600">{gap.avgDelay}j</div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-2">
+                              <Badge variant="outline" className="bg-yellow-50 dark:bg-yellow-950 border-yellow-400 text-yellow-700 dark:text-yellow-300">
+                                <AlertTriangle className="h-3 w-3 mr-1" />
+                                Action requise
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                            <div className="flex items-start gap-2">
+                              <Lightbulb className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                              <div>
+                                <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">
+                                  Recommandation:
+                                </p>
+                                <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
+                                  Former {Math.ceil(gap.gap / 10)} technicien(s) sur <strong>{gap.skill}</strong> pour
+                                  réduire le délai moyen de {gap.avgDelay}j à &lt;1j et éliminer les retards sur {gap.impactedInterventions} interventions.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {skillGapAnalysis.length === 0 && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <CheckCircle2 className="h-12 w-12 mx-auto mb-2 text-green-500" />
+                        <p>✅ Aucun gap de compétences critique détecté</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* WORKLOAD ALERTS */}
+              {workloadAlerts.length > 0 && (
+                <Card className="border-2 border-red-200 dark:border-red-800">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <UserX className="h-5 w-5 text-red-600" />
+                      ⚠️ Alertes de Surcharge (7 prochains jours)
+                    </CardTitle>
+                    <CardDescription>
+                      Prédiction de capacité et recommandations d'optimisation
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {workloadAlerts.map((alert) => {
+                        const statusConfig = {
+                          overloaded: {
+                            color: 'bg-red-500',
+                            textColor: 'text-red-700 dark:text-red-300',
+                            bgColor: 'bg-red-50 dark:bg-red-950',
+                            borderColor: 'border-red-300 dark:border-red-700',
+                            icon: <AlertTriangle className="h-5 w-5 text-red-600" />,
+                          },
+                          underutilized: {
+                            color: 'bg-blue-500',
+                            textColor: 'text-blue-700 dark:text-blue-300',
+                            bgColor: 'bg-blue-50 dark:bg-blue-950',
+                            borderColor: 'border-blue-300 dark:border-blue-700',
+                            icon: <TrendDown className="h-5 w-5 text-blue-600" />,
+                          },
+                          optimal: {
+                            color: 'bg-green-500',
+                            textColor: 'text-green-700 dark:text-green-300',
+                            bgColor: 'bg-green-50 dark:bg-green-950',
+                            borderColor: 'border-green-300 dark:border-green-700',
+                            icon: <CheckCircle2 className="h-5 w-5 text-green-600" />,
+                          },
+                        };
+
+                        const config = statusConfig[alert.status];
+
+                        return (
+                          <div
+                            key={alert.technicianName}
+                            className={`p-4 rounded-lg border-2 ${config.bgColor} ${config.borderColor}`}
+                          >
+                            <div className="flex items-start justify-between flex-wrap gap-4">
+                              <div className="flex items-center gap-3">
+                                {config.icon}
+                                <div>
+                                  <h3 className="font-bold text-lg">{alert.technicianName}</h3>
+                                  <div className="flex items-center gap-3 mt-2">
+                                    <Badge className={`${config.color} text-white`}>
+                                      {alert.capacityPercent}% capacité
+                                    </Badge>
+                                    <span className="text-sm text-muted-foreground">
+                                      {alert.weeklyHours}h / 40h semaine
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex-shrink-0">
+                                <div className="text-right">
+                                  <div className="text-sm font-medium text-muted-foreground mb-1">
+                                    Progression
+                                  </div>
+                                  <div className="w-48 bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                                    <div
+                                      className={`h-3 rounded-full ${config.color} transition-all duration-500`}
+                                      style={{ width: `${Math.min(alert.capacityPercent, 100)}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-3 p-3 bg-white dark:bg-gray-900 rounded-lg border">
+                              <div className="flex items-start gap-2">
+                                <Briefcase className="h-4 w-4 text-indigo-600 flex-shrink-0 mt-0.5" />
+                                <p className="text-sm font-medium">{alert.recommendation}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* TECHNICIAN-MACHINE CORRELATION */}
+              {technicianPerformanceCorrelation.length > 0 && (
+                <Card className="border-2 border-green-200 dark:border-green-800">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <UserCheck className="h-5 w-5 text-green-600" />
+                      📊 Corrélation Pannes-Techniciens
+                    </CardTitle>
+                    <CardDescription>
+                      Impact des interventions préventives et qualité de réparation
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b-2 border-gray-300 dark:border-gray-700">
+                            <th className="text-left py-3 px-2 font-semibold">Technicien</th>
+                            <th className="text-center py-3 px-2 font-semibold">Machines</th>
+                            <th className="text-center py-3 px-2 font-semibold">Taux succès</th>
+                            <th className="text-center py-3 px-2 font-semibold">% Préventif</th>
+                            <th className="text-center py-3 px-2 font-semibold">Score qualité</th>
+                            <th className="text-center py-3 px-2 font-semibold">Pannes répétées</th>
+                            <th className="text-center py-3 px-2 font-semibold">Impact</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {technicianPerformanceCorrelation.slice(0, 10).map((corr, idx) => {
+                            const isTopPerformer = corr.qualityScore >= 85;
+                            const hasLowRepeatRate = corr.repeatFailureRate < 5;
+                            const preventiveLeader = corr.preventiveImpact >= 40;
+
+                            return (
+                              <tr
+                                key={corr.technicianName}
+                                className={`border-b hover:bg-gray-50 dark:hover:bg-gray-900 ${
+                                  isTopPerformer ? 'bg-green-50 dark:bg-green-950' : ''
+                                }`}
+                              >
+                                <td className="py-3 px-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{corr.technicianName}</span>
+                                    {isTopPerformer && (
+                                      <Award className="h-4 w-4 text-yellow-500" />
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  <Badge variant="outline">{corr.machinesServiced}</Badge>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  <Badge
+                                    variant={corr.avgSuccessRate >= 80 ? 'default' : 'secondary'}
+                                    className={
+                                      corr.avgSuccessRate >= 80
+                                        ? 'bg-green-500'
+                                        : 'bg-gray-400'
+                                    }
+                                  >
+                                    {corr.avgSuccessRate}%
+                                  </Badge>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  <div className="flex flex-col items-center">
+                                    <span className="font-semibold text-blue-600">
+                                      {corr.preventiveImpact}%
+                                    </span>
+                                    {preventiveLeader && (
+                                      <Shield className="h-3 w-3 text-green-600 mt-1" />
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  <Badge
+                                    className={
+                                      corr.qualityScore >= 85
+                                        ? 'bg-green-600 text-white'
+                                        : corr.qualityScore >= 70
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-orange-600 text-white'
+                                    }
+                                  >
+                                    {corr.qualityScore}
+                                  </Badge>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  <span
+                                    className={`font-semibold ${
+                                      corr.repeatFailureRate > 10
+                                        ? 'text-red-600'
+                                        : corr.repeatFailureRate > 5
+                                        ? 'text-orange-600'
+                                        : 'text-green-600'
+                                    }`}
+                                  >
+                                    {corr.repeatFailureRate}%
+                                  </span>
+                                </td>
+                                <td className="text-center py-3 px-2">
+                                  {hasLowRepeatRate && preventiveLeader ? (
+                                    <Badge className="bg-green-600 text-white">
+                                      ⭐ Excellent
+                                    </Badge>
+                                  ) : corr.repeatFailureRate > 10 ? (
+                                    <Badge variant="destructive">⚠️ À améliorer</Badge>
+                                  ) : (
+                                    <Badge variant="secondary">✓ Bon</Badge>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                      <div className="flex items-start gap-2">
+                        <Brain className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                        <div className="space-y-2">
+                          <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">
+                            💡 Insights clés:
+                          </p>
+                          <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+                            {technicianPerformanceCorrelation.filter(c => c.preventiveImpact >= 40).length > 0 && (
+                              <li>
+                                • <strong>{technicianPerformanceCorrelation.filter(c => c.preventiveImpact >= 40).length} techniciens</strong> excellent
+                                sur le préventif (&gt;40%) → Moins de pannes correctives
+                              </li>
+                            )}
+                            {technicianPerformanceCorrelation.filter(c => c.repeatFailureRate < 5).length > 0 && (
+                              <li>
+                                • <strong>{technicianPerformanceCorrelation.filter(c => c.repeatFailureRate < 5).length} techniciens</strong> avec
+                                &lt;5% pannes répétées → Qualité de réparation élevée
+                              </li>
+                            )}
+                            {technicianPerformanceCorrelation.filter(c => c.repeatFailureRate > 10).length > 0 && (
+                              <li className="text-orange-700 dark:text-orange-300">
+                                • ⚠️ <strong>{technicianPerformanceCorrelation.filter(c => c.repeatFailureRate > 10).length} techniciens</strong> avec
+                                &gt;10% pannes répétées → Formation/supervision recommandée
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Empty State for Advanced Analytics */}
+              {skillGapAnalysis.length === 0 && 
+               workloadAlerts.length === 0 && 
+               technicianPerformanceCorrelation.length === 0 && (
+                <div className="text-center py-12">
+                  <Brain className="h-16 w-16 mx-auto mb-4 text-indigo-400 opacity-50" />
+                  <p className="text-muted-foreground text-lg">
+                    Données insuffisantes pour les analyses avancées
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Importez plus de work orders pour activer ces insights
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Toggle Button for Advanced Analytics (if hidden) */}
+        {!showAdvancedAnalytics && (
+          <Card className="border-2 border-dashed border-indigo-300 dark:border-indigo-700 bg-indigo-50/50 dark:bg-indigo-950/50">
+            <CardContent className="p-6 text-center">
+              <Button
+                variant="default"
+                size="lg"
+                onClick={() => setShowAdvancedAnalytics(true)}
+                className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+              >
+                <Brain className="h-5 w-5 mr-2" />
+                Afficher les Analyses Intelligentes Avancées
+              </Button>
+              <p className="text-sm text-muted-foreground mt-2">
+                Détection de gaps, alertes de surcharge, corrélations de performance
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -721,11 +1465,33 @@ export default function InsightsPage() {
                         <div className="text-xs text-purple-600 dark:text-purple-400 font-medium">Avg Time</div>
                         <div className="text-2xl font-bold text-purple-900 dark:text-purple-100">{tech.avgRepairTime}h</div>
                       </div>
-                      <div className="bg-orange-50 dark:bg-orange-950 p-3 rounded-lg">
-                        <div className="text-xs text-orange-600 dark:text-orange-400 font-medium">Total Hours</div>
-                        <div className="text-2xl font-bold text-orange-900 dark:text-orange-100">{tech.totalHours}h</div>
+                      <div className="bg-orange-50 dark:bg-orange-950 p-3 rounded-lg relative">
+                        <div className="text-xs text-orange-600 dark:text-orange-400 font-medium flex items-center gap-1">
+                          Total Hours
+                          <span className="text-[10px] opacity-70">
+                            ({tech.totalRepairs > 0 ? (tech.totalHours / tech.totalRepairs).toFixed(1) : '0'}h/int)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-2xl font-bold text-orange-900 dark:text-orange-100">{tech.totalHours}h</div>
+                          {tech.totalHours > 200 && (
+                            <Badge variant="destructive" className="text-xs">
+                              Élevé
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                     </div>
+
+                    {/* Data Quality Warning */}
+                    {tech.totalHours > 200 && (
+                      <div className="p-2 bg-yellow-50 dark:bg-yellow-950 rounded border border-yellow-200 dark:border-yellow-800">
+                        <p className="text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1">
+                          <AlertTriangle className="h-3 w-3" />
+                          Période avec beaucoup d'interventions - Utilisez le filtre par mois pour plus de détails
+                        </p>
+                      </div>
+                    )}
 
                     {/* Specializations */}
                     {tech.specializations.length > 0 && (

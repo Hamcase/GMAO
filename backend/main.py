@@ -631,6 +631,131 @@ async def serve_pdf(
         }
     )
 
+# --- ENDPOINT POUR LISTER LES PDFs STOCKÉS ---
+@app.get("/api/v1/documents/list")
+async def list_stored_documents(
+    current_user: UserTokenData = Depends(get_current_user)
+):
+    """
+    Liste tous les PDFs stockés pour l'utilisateur avec leurs métadonnées
+    """
+    try:
+        user_dir = PDF_STORAGE_DIR / current_user.sub
+        
+        if not user_dir.exists():
+            return {"documents": []}
+        
+        documents = []
+        
+        # Parcourir tous les PDFs de l'utilisateur
+        for pdf_file in user_dir.glob("*.pdf"):
+            file_stat = pdf_file.stat()
+            
+            # Compter les chunks dans ChromaDB
+            chunk_count = 0
+            try:
+                collection = chroma_manager.get_or_create_collection(current_user.sub)
+                results = collection.get(
+                    where={"document_name": pdf_file.name},
+                    include=["metadatas"]
+                )
+                chunk_count = len(results['ids']) if results['ids'] else 0
+            except Exception as e:
+                print(f"Erreur comptage chunks pour {pdf_file.name}: {e}")
+            
+            documents.append({
+                "filename": pdf_file.name,
+                "size": file_stat.st_size,
+                "size_mb": round(file_stat.st_size / (1024 * 1024), 2),
+                "uploaded_at": file_stat.st_mtime,
+                "chunk_count": chunk_count,
+                "url": f"/api/v1/pdf/{current_user.sub}/{pdf_file.name}"
+            })
+        
+        # Trier par date de modification (plus récent en premier)
+        documents.sort(key=lambda x: x['uploaded_at'], reverse=True)
+        
+        return {
+            "documents": documents,
+            "total": len(documents)
+        }
+    
+    except Exception as e:
+        print(f"Erreur lors de la liste des documents: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la récupération des documents: {str(e)}"
+        )
+
+
+# --- ENDPOINT POUR SUPPRIMER UN PDF ET SES VECTEURS ---
+@app.delete("/api/v1/documents/{filename}")
+async def delete_document(
+    filename: str,
+    current_user: UserTokenData = Depends(get_current_user)
+):
+    """
+    Supprime un PDF et tous ses vecteurs associés dans ChromaDB
+    """
+    try:
+        print(f"\n{'='*60}")
+        print(f"🗑️  SUPPRESSION DEMANDÉE")
+        print(f"Utilisateur: {current_user.sub}")
+        print(f"Fichier: '{filename}'")
+        print(f"{'='*60}\n")
+        
+        # 1. Supprimer les vecteurs de ChromaDB
+        print(f"Étape 1: Suppression des vecteurs dans ChromaDB...")
+        deleted_chunks = chroma_manager.delete_by_document(
+            user_id=current_user.sub,
+            document_name=filename
+        )
+        
+        if deleted_chunks > 0:
+            print(f"✅ {deleted_chunks} chunks supprimés de ChromaDB")
+        else:
+            print(f"⚠️  Aucun chunk trouvé dans ChromaDB pour '{filename}'")
+            print(f"⚠️  Le document n'était peut-être pas indexé ou a déjà été supprimé")
+        
+        # 2. Supprimer le fichier PDF du stockage local
+        print(f"\nÉtape 2: Suppression du fichier PDF...")
+        file_path = PDF_STORAGE_DIR / current_user.sub / filename
+        
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fichier {filename} non trouvé"
+            )
+        
+        file_path.unlink()
+        print(f"✅ Fichier PDF supprimé: {file_path}")
+        
+        print(f"\n{'='*60}")
+        print(f"✅ SUPPRESSION COMPLÈTE")
+        print(f"Fichier: '{filename}'")
+        print(f"Chunks supprimés: {deleted_chunks}")
+        print(f"{'='*60}\n")
+        
+        return {
+            "status": "success",
+            "message": f"Document {filename} supprimé avec succès",
+            "chunks_deleted": deleted_chunks,
+            "warning": "Aucun vecteur trouvé dans ChromaDB" if deleted_chunks == 0 else None
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Erreur lors de la suppression: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la suppression: {str(e)}"
+        )
+
 # --- Lancement du serveur Uvicorn ---
 if __name__ == "__main__":
     # S'exécute quand on lance 'python main.py'

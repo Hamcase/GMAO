@@ -39,11 +39,14 @@ export default function PDFViewerWithHighlight({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [pageText, setPageText] = useState<string>('');
+  const [renderKey, setRenderKey] = useState(0); // Force re-render
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const highlightCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pdfDocRef = useRef<any>(null);
+  const renderTaskRef = useRef<any>(null);
+  const isRenderingRef = useRef<boolean>(false);
 
   // Load PDF document
   useEffect(() => {
@@ -52,6 +55,16 @@ export default function PDFViewerWithHighlight({
         setLoading(true);
         setError('');
         
+        // Destroy previous PDF if exists
+        if (pdfDocRef.current) {
+          try {
+            await pdfDocRef.current.destroy();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          pdfDocRef.current = null;
+        }
+        
         const loadingTask = pdfjsLib.getDocument(pdfUrl);
         const pdf = await loadingTask.promise;
         
@@ -59,6 +72,11 @@ export default function PDFViewerWithHighlight({
         setNumPages(pdf.numPages);
         setCurrentPage(citation.page_number || 1);
         setLoading(false);
+        
+        // Force render after PDF is loaded
+        setTimeout(() => {
+          setRenderKey(prev => prev + 1);
+        }, 100);
       } catch (err) {
         console.error('Error loading PDF:', err);
         setError('Failed to load PDF');
@@ -70,7 +88,7 @@ export default function PDFViewerWithHighlight({
 
     return () => {
       if (pdfDocRef.current) {
-        pdfDocRef.current.destroy();
+        pdfDocRef.current.destroy().catch(() => {});
       }
     };
   }, [pdfUrl, citation.page_number]);
@@ -79,6 +97,24 @@ export default function PDFViewerWithHighlight({
   useEffect(() => {
     const renderPage = async () => {
       if (!pdfDocRef.current || !canvasRef.current) return;
+      
+      // Cancel previous render if still running
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (e) {
+          // Ignore cancellation errors
+        }
+        renderTaskRef.current = null;
+      }
+      
+      // Prevent concurrent renders
+      if (isRenderingRef.current) {
+        console.log('Render already in progress, skipping...');
+        return;
+      }
+      
+      isRenderingRef.current = true;
 
       try {
         const page = await pdfDocRef.current.getPage(currentPage);
@@ -97,7 +133,9 @@ export default function PDFViewerWithHighlight({
           viewport: viewport,
         };
 
-        await page.render(renderContext).promise;
+        renderTaskRef.current = page.render(renderContext);
+        await renderTaskRef.current.promise;
+        renderTaskRef.current = null;
 
         // Extract text for highlighting
         const textContent = await page.getTextContent();
@@ -107,70 +145,139 @@ export default function PDFViewerWithHighlight({
         });
         setPageText(fullText);
 
-        // Draw highlights on citation page
+        // Draw highlights on citation page - WRAPPED IN TRY-CATCH
         if (currentPage === citation.page_number && highlightCanvasRef.current) {
-          const highlightCanvas = highlightCanvasRef.current;
-          const highlightCtx = highlightCanvas.getContext('2d');
-          
-          // Match canvas dimensions
-          highlightCanvas.height = viewport.height;
-          highlightCanvas.width = viewport.width;
-          
-          if (highlightCtx) {
-            // Clear previous highlights
-            highlightCtx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
+          try {
+            const highlightCanvas = highlightCanvasRef.current;
+            const highlightCtx = highlightCanvas.getContext('2d');
             
-            // Build full text with positions
-            let currentPos = 0;
-            const textItems: Array<{item: any, startPos: number, endPos: number}> = [];
+            // Match canvas dimensions
+            highlightCanvas.height = viewport.height;
+            highlightCanvas.width = viewport.width;
             
-            textContent.items.forEach((item: any) => {
-              const str = item.str;
-              textItems.push({
-                item: item,
-                startPos: currentPos,
-                endPos: currentPos + str.length
-              });
-              currentPos += str.length + 1; // +1 for space
-            });
-            
-            // Find continuous text match from citation
-            const citationWords = citation.text.trim().split(/\s+/);
-            const searchText = citationWords.slice(0, 10).join(' ').toLowerCase(); // First 10 words
-            const fullTextLower = fullText.toLowerCase();
-            const matchIndex = fullTextLower.indexOf(searchText.substring(0, 50)); // Match first 50 chars
-            
-            if (matchIndex !== -1) {
-              const matchEnd = matchIndex + Math.min(150, searchText.length); // Highlight up to 150 chars
+            if (highlightCtx) {
+              // Clear previous highlights
+              highlightCtx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
               
-              // Highlight all text items that fall within the match range
-              textItems.forEach(({item, startPos, endPos}) => {
-                const overlaps = (startPos < matchEnd && endPos > matchIndex);
-                
-                if (overlaps && item.transform) {
-                  const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-                  const x = tx[4];
-                  const y = tx[5];
-                  const height = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
-                  const width = item.width * viewport.scale;
-                  
-                  // Draw highlight
-                  highlightCtx.fillStyle = 'rgba(255, 235, 59, 0.4)'; // Brighter yellow
-                  highlightCtx.fillRect(x, y - height * 0.85, width, height);
-                }
+              // Build full text with positions
+              let currentPos = 0;
+              const textItems: Array<{item: any, startPos: number, endPos: number}> = [];
+              
+              textContent.items.forEach((item: any) => {
+                const str = item.str || '';
+                textItems.push({
+                  item: item,
+                  startPos: currentPos,
+                  endPos: currentPos + str.length
+                });
+                currentPos += str.length + 1; // +1 for space
               });
+              
+              // Improved matching: normalize and search for exact citation text
+              const normalizeText = (text: string) => {
+                return text.toLowerCase()
+                  .replace(/\s+/g, ' ')  // Normalize whitespace
+                  .replace(/[\r\n]+/g, ' ')  // Remove line breaks
+                  .trim();
+              };
+              
+              const citationText = normalizeText(citation.text || '');
+              const fullTextNormalized = normalizeText(fullText);
+              
+              // Try to find the exact citation text
+              let matchIndex = -1;
+              if (citationText.length > 0) {
+                matchIndex = fullTextNormalized.indexOf(citationText.substring(0, Math.min(100, citationText.length)));
+                
+                // If not found, try with smaller chunks (first 50 chars)
+                if (matchIndex === -1 && citationText.length >= 50) {
+                  matchIndex = fullTextNormalized.indexOf(citationText.substring(0, 50));
+                }
+                
+                // If still not found, try just keywords
+                if (matchIndex === -1 && citationText.length > 20) {
+                  const keywords = citation.text.split(/\s+/).filter(w => w.length > 4).slice(0, 3);
+                  for (const keyword of keywords) {
+                    const kwIndex = fullTextNormalized.indexOf(keyword.toLowerCase());
+                    if (kwIndex !== -1) {
+                      matchIndex = kwIndex;
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              if (matchIndex !== -1) {
+                // Calculate match end based on actual citation length (cap at 300 chars for visibility)
+                const matchLength = Math.min(citationText.length, 300);
+                const matchEnd = matchIndex + matchLength;
+                
+                console.log('Highlighting:', { matchIndex, matchEnd, citationLength: citationText.length });
+                
+                // Highlight all text items that fall within the match range
+                textItems.forEach(({item, startPos, endPos}) => {
+                  try {
+                    // Check if this text item overlaps with our match range
+                    const overlaps = (startPos < matchEnd && endPos > matchIndex);
+                    
+                    if (overlaps && item.transform && Array.isArray(item.transform) && item.transform.length >= 6) {
+                      const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+                      const x = tx[4];
+                      const y = tx[5];
+                      const height = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+                      const width = (item.width || 0) * viewport.scale;
+                      
+                      if (width > 0 && height > 0) {
+                        // Draw highlight with bright yellow
+                        highlightCtx.fillStyle = 'rgba(255, 235, 59, 0.5)';
+                        highlightCtx.fillRect(x, y - height * 0.85, width, height);
+                        
+                        // Add a subtle border
+                        highlightCtx.strokeStyle = 'rgba(255, 193, 7, 0.8)';
+                        highlightCtx.lineWidth = 1;
+                        highlightCtx.strokeRect(x, y - height * 0.85, width, height);
+                      }
+                    }
+                  } catch (itemErr) {
+                    // Ignore individual item errors
+                    console.warn('Error highlighting text item:', itemErr);
+                  }
+                });
+              } else {
+                console.warn('Could not find citation text on page');
+              }
             }
+          } catch (highlightErr) {
+            // Don't fail the entire render if highlighting fails
+            console.error('Error during highlighting (non-fatal):', highlightErr);
           }
         }
 
       } catch (err) {
         console.error('Error rendering page:', err);
-        setError('Failed to render page');
+        // Only set error if it's not a cancellation
+        if (err && (err as any).name !== 'RenderingCancelledException') {
+          setError('Failed to render page');
+        }
+      } finally {
+        isRenderingRef.current = false;
       }
     };
 
     renderPage();
-  }, [currentPage, scale, citation]);
+    
+    // Cleanup: cancel render on unmount
+    return () => {
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (e) {
+          // Ignore
+        }
+      }
+      isRenderingRef.current = false;
+    };
+  }, [currentPage, scale, citation, renderKey]);
 
   const zoomIn = () => setScale((prev) => Math.min(prev + 0.2, 2.5));
   const zoomOut = () => setScale((prev) => Math.max(prev - 0.2, 0.8));
