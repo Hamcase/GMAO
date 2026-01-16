@@ -429,52 +429,10 @@ Follow these steps to run the complete platform:
 - **Federated Learning**: Privacy-preserving model training across multiple facilities
 
 ## Contributors
-- **Developed by**: Amcassou Hanane & Project Team
+- **Developed by**: Amcassou Hanane & Benakka Zaid
 - **Academic Supervision**: ENSAM (École Nationale Supérieure d'Arts et Métiers)
-- **Technologies**: Next.js, FastAPI, Prophet, TensorFlow, ChromaDB, Supabase
 
 ## License
 All rights reserved. This project is developed for academic and research purposes.
 
 ---
-
-## Additional Resources
-
-### Documentation
-- **Frontend**: Component documentation in `packages/ui/README.md`
-- **Backend**: API documentation at http://localhost:8000/docs (when running)
-- **Database**: Schema documentation in `packages/shared/src/localdb/schema.ts`
-
-### Support and Community
-- **Issues**: Report bugs or request features at [GitHub Issues](https://github.com/Hamcase/GMAO/issues)
-- **Discussions**: Share ideas and ask questions in [GitHub Discussions](https://github.com/Hamcase/GMAO/discussions)
-
-### Useful Commands
-```bash
-# Development
-pnpm dev                      # Start all services
-pnpm build                    # Production build
-pnpm lint                     # Run linters
-pnpm format:fix              # Format code with Prettier
-pnpm typecheck               # TypeScript type checking
-
-# Testing
-pnpm test                     # Run E2E tests (Playwright)
-
-# Supabase Management
-pnpm supabase:web:start      # Start local Supabase
-pnpm supabase:web:stop       # Stop local Supabase
-pnpm supabase:web:reset      # Reset database (WARNING: deletes all data)
-pnpm supabase:web:typegen    # Generate TypeScript types
-
-# Cleanup
-pnpm clean                    # Clean build artifacts
-pnpm clean:workspaces        # Clean all workspace builds
-```
-
-### Contact
-For academic collaboration or technical inquiries, please open an issue on the GitHub repository.
-
----
-
-**Made with ❤️ for Industrial Maintenance Management**
